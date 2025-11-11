@@ -120,4 +120,31 @@ const TrailerPlayer = ({
                 <select
                   value={playbackRate}
                   onChange={(e) => changePlaybackRate(parseFloat(e.target.value))}
-                  className="
+                  className="playback-rate"
+                  aria-label="Playback speed"
+                >
+                  <option value="0.5">0.5x</option>
+                  <option value="0.75">0.75x</option>
+                  <option value="1">Normal</option>
+                  <option value="1.25">1.25x</option>
+                  <option value="1.5">1.5x</option>
+                  <option value="2">2x</option>
+                </select>
+
+                <button 
+                  className="control-btn"
+                  onClick={toggleFullscreen}
+                  aria-label="Fullscreen"
+                >
+                  <Maximize size={20} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+export default TrailerPlayer
