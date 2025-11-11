@@ -4,19 +4,19 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Serve static files
+// Serve static files from dist directory
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Simple API test
-app.get('/api/hello', (req, res) => {
-  res.json({ message: 'Hello from MovieStream API!' });
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', message: 'MovieStream is running!' });
 });
 
-// Serve React app for all routes
+// Handle all routes - serve React app
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🎬 MovieStream server running on port ${PORT}`);
 });
