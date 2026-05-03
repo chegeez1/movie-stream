@@ -128,63 +128,91 @@ function Hero({ items }: { items: BannerItem[] }) {
       </div>
 
       {/* Bottom bar */}
-      <div className="absolute bottom-0 left-0 right-0 flex items-end justify-between px-5 md:px-10 pb-8 z-20">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={current}
-            initial={{ y: 16, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -8, opacity: 0 }}
-            transition={{ duration: 0.4, delay: 0.1 }}
-            className="max-w-lg"
-          >
-            <div className="flex items-center gap-2 mb-2.5">
-              <span className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded ${
-                isSeries ? 'bg-violet-600 text-white' : 'bg-primary text-white'
-              }`}>
-                {isSeries ? 'SERIES' : 'MOVIE'}
-              </span>
-              {year && <span className="text-[11px] font-semibold text-white/70">{year}</span>}
-              {item.imdbRating && (
-                <span className="flex items-center gap-0.5 text-[11px] font-bold text-yellow-400">
-                  ★ {item.imdbRating}
+      <div className="absolute bottom-0 left-0 right-0 px-5 md:px-10 pb-8 z-20">
+        <div className="flex items-end justify-between gap-4">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={current}
+              initial={{ y: 16, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: -8, opacity: 0 }}
+              transition={{ duration: 0.4, delay: 0.1 }}
+              className="flex-1 min-w-0"
+            >
+              <div className="flex items-center gap-2 mb-2.5">
+                <span className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded ${
+                  isSeries ? 'bg-violet-600 text-white' : 'bg-primary text-white'
+                }`}>
+                  {isSeries ? 'SERIES' : 'MOVIE'}
                 </span>
+                {year && <span className="text-[11px] font-semibold text-white/70">{year}</span>}
+                {item.imdbRating && (
+                  <span className="flex items-center gap-0.5 text-[11px] font-bold text-yellow-400">
+                    ★ {item.imdbRating}
+                  </span>
+                )}
+              </div>
+              <h1 className="text-3xl md:text-5xl font-black text-white mb-2 leading-tight drop-shadow-xl line-clamp-2">
+                {item.title}
+              </h1>
+              {genres.length > 0 && (
+                <p className="text-sm text-white/55 mb-4 md:mb-0">{genres.join(' • ')}</p>
               )}
-            </div>
-            <h1 className="text-3xl md:text-5xl font-black text-white mb-2 leading-tight drop-shadow-xl">
-              {item.title}
-            </h1>
-            {genres.length > 0 && (
-              <p className="text-sm text-white/55">{genres.join(' • ')}</p>
-            )}
-          </motion.div>
-        </AnimatePresence>
 
-        <div className="flex items-center gap-2 shrink-0 ml-4">
-          <button onClick={() => go(current - 1)} className="w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 border border-white/15 flex items-center justify-center text-white transition-colors">
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          <button onClick={() => go(current + 1)} className="w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 border border-white/15 flex items-center justify-center text-white transition-colors">
-            <ChevronRight className="w-4 h-4" />
-          </button>
-          <Link href={`/movie/${item.detailPath}`}>
-            <button className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white font-bold rounded-lg hover:bg-primary/85 transition-colors text-sm shadow-lg shadow-primary/25">
-              <Play className="w-4 h-4 fill-white" />
-              Watch Now
+              {/* Mobile action row — shown only on small screens */}
+              <div className="flex items-center gap-2 mt-3 md:hidden">
+                <Link href={`/movie/${item.detailPath}`} className="flex-1">
+                  <button className="w-full flex items-center justify-center gap-2 px-5 py-2.5 bg-primary text-white font-bold rounded-lg text-sm shadow-lg shadow-primary/25">
+                    <Play className="w-4 h-4 fill-white" />
+                    Watch Now
+                  </button>
+                </Link>
+                <button
+                  onClick={() => setMuted(v => !v)}
+                  className="w-10 h-10 rounded-full bg-black/60 border border-white/15 flex items-center justify-center text-white shrink-0"
+                >
+                  {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                </button>
+                <button
+                  onClick={() => {
+                    if (navigator.share) navigator.share({ url: window.location.href, title: item.title }).catch(() => {});
+                    else navigator.clipboard.writeText(window.location.href);
+                  }}
+                  className="w-10 h-10 rounded-full bg-black/60 border border-white/15 flex items-center justify-center text-white shrink-0"
+                >
+                  <Share2 className="w-4 h-4" />
+                </button>
+              </div>
+            </motion.div>
+          </AnimatePresence>
+
+          {/* Desktop button group — hidden on mobile */}
+          <div className="hidden md:flex items-center gap-2 shrink-0">
+            <button onClick={() => go(current - 1)} className="w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 border border-white/15 flex items-center justify-center text-white transition-colors">
+              <ChevronLeft className="w-4 h-4" />
             </button>
-          </Link>
-          <button onClick={() => setMuted(v => !v)} className="w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 border border-white/15 flex items-center justify-center text-white transition-colors">
-            {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={() => {
-              if (navigator.share) navigator.share({ url: window.location.href, title: item.title }).catch(() => {});
-              else navigator.clipboard.writeText(window.location.href);
-            }}
-            className="w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 border border-white/15 flex items-center justify-center text-white transition-colors"
-          >
-            <Share2 className="w-4 h-4" />
-          </button>
+            <button onClick={() => go(current + 1)} className="w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 border border-white/15 flex items-center justify-center text-white transition-colors">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            <Link href={`/movie/${item.detailPath}`}>
+              <button className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white font-bold rounded-lg hover:bg-primary/85 transition-colors text-sm shadow-lg shadow-primary/25">
+                <Play className="w-4 h-4 fill-white" />
+                Watch Now
+              </button>
+            </Link>
+            <button onClick={() => setMuted(v => !v)} className="w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 border border-white/15 flex items-center justify-center text-white transition-colors">
+              {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={() => {
+                if (navigator.share) navigator.share({ url: window.location.href, title: item.title }).catch(() => {});
+                else navigator.clipboard.writeText(window.location.href);
+              }}
+              className="w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 border border-white/15 flex items-center justify-center text-white transition-colors"
+            >
+              <Share2 className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
