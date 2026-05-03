@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRoute, Link } from 'wouter';
 import { usePlayData, useSimilar } from '@/hooks/use-movies';
 import { useWatchHistory } from '@/hooks/use-watch-history';
@@ -11,6 +11,39 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Play, X, Loader2, Info, Share2, Check, RefreshCw, Wifi, WifiOff, Zap, Bookmark, BookmarkCheck, Film, Star, Eye } from 'lucide-react';
 import { useRatings } from '@/hooks/use-ratings';
 import { MovieCard, MovieCardSkeleton } from '@/components/movie-card';
+
+/* ─── Network status hook ────────────────────────────────────────────────
+   Returns { isOnline, justReconnected }.
+   justReconnected is true for 2.5 s after coming back online.
+──────────────────────────────────────────────────────────────────────── */
+function useNetworkStatus() {
+  const [isOnline, setIsOnline]           = useState(navigator.onLine);
+  const [justReconnected, setJustReconn] = useState(false);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+
+    const onOnline  = () => {
+      setIsOnline(true);
+      setJustReconn(true);
+      timer = setTimeout(() => setJustReconn(false), 2500);
+    };
+    const onOffline = () => {
+      setIsOnline(false);
+      setJustReconn(false);
+    };
+
+    window.addEventListener('online',  onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online',  onOnline);
+      window.removeEventListener('offline', onOffline);
+      clearTimeout(timer);
+    };
+  }, []);
+
+  return { isOnline, justReconnected };
+}
 
 function useCopyLink(text: string) {
   const [copied, setCopied] = useState(false);
@@ -205,12 +238,30 @@ function WatchModal({
   const [srcIdx, setSrcIdx]       = useState(0);
   const [loaded, setLoaded]       = useState(false);
   const [countdown, setCountdown] = useState(LOAD_TIMEOUT_SECS);
+  const [reloadKey, setReloadKey] = useState(0);
   const { copied, copy }          = useCopyLink(shareUrl);
   const iframeRef                 = React.useRef<HTMLIFrameElement>(null);
   const manualRef                 = React.useRef(false);
   const current                   = sources[srcIdx];
   const hasMore                   = srcIdx < sources.length - 1;
   const wasPreRanked              = !!preRanked;
+  const { isOnline, justReconnected } = useNetworkStatus();
+
+  /* Auto-reload player when network reconnects */
+  const wasOnlineRef = useRef(isOnline);
+  useEffect(() => {
+    if (!wasOnlineRef.current && isOnline) {
+      /* Small delay so the connection is stable before we reload */
+      const t = setTimeout(() => {
+        setLoaded(false);
+        setCountdown(LOAD_TIMEOUT_SECS);
+        manualRef.current = true;
+        setReloadKey(k => k + 1);
+      }, 800);
+      return () => clearTimeout(t);
+    }
+    wasOnlineRef.current = isOnline;
+  }, [isOnline]);
 
   /* Keyboard close */
   useEffect(() => {
@@ -374,11 +425,30 @@ function WatchModal({
           </div>
         )}
 
+        {/* Offline overlay */}
+        {!isOnline && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 bg-black/90 backdrop-blur-sm">
+            <WifiOff className="w-12 h-12 text-red-400" />
+            <div className="text-center">
+              <p className="text-white font-bold text-lg">No Internet Connection</p>
+              <p className="text-white/50 text-sm mt-1">Player will resume automatically when you're back online</p>
+            </div>
+          </div>
+        )}
+
+        {/* Reconnected toast */}
+        {justReconnected && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 bg-green-500/90 backdrop-blur-sm text-white text-sm font-semibold px-5 py-2.5 rounded-full shadow-xl animate-in fade-in slide-in-from-bottom-4 duration-300">
+            <Wifi className="w-4 h-4" />
+            Reconnected — reloading player…
+          </div>
+        )}
+
         {/* Iframe — hidden while checking/loading, fades in on load */}
         {!checking && (
           <iframe
             ref={iframeRef}
-            key={`${srcIdx}-${current.url}`}
+            key={`${srcIdx}-${reloadKey}-${current.url}`}
             src={current.url}
             className={`absolute inset-0 w-full h-full border-0 transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
             allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
