@@ -433,13 +433,6 @@ function WatchModal({
     const origOpen = window.open;
     (window as Window).open = () => null;
 
-    // Intercept beforeunload to detect ad-triggered navigations
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      // We can't reliably cancel navigation but we can log it
-      // The real block is the nginx CSP header
-      e.preventDefault();
-    };
-
     // Block clicks on any dynamically injected ad anchors
     const onDocClick = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
@@ -527,18 +520,35 @@ function WatchModal({
   return (
     <div className="fixed inset-0 z-[100] bg-black flex flex-col">
       {/* ── Topbar ── */}
-      <div className="flex items-center justify-between px-4 py-2 bg-black shrink-0 z-20 border-b border-white/10 gap-3">
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-sm font-black text-primary tracking-widest">CHEGEMOVIES</span>
-          {wasPreRanked && (
-            <span className="flex items-center gap-0.5 text-[10px] text-green-400/80 font-semibold" title="Servers pre-ranked at page load">
-              <Zap className="w-2.5 h-2.5" /> instant
-            </span>
-          )}
+      <div className="flex flex-col md:flex-row md:items-center px-4 py-2 bg-black shrink-0 z-20 border-b border-white/10 gap-0 md:gap-3">
+
+        {/* Row 1 (mobile) / left chunk (desktop): logo + close */}
+        <div className="flex items-center justify-between w-full md:w-auto md:shrink-0 mb-1.5 md:mb-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-black text-primary tracking-widest">CHEGEMOVIES</span>
+            {wasPreRanked && (
+              <span className="flex items-center gap-0.5 text-[10px] text-green-400/80 font-semibold" title="Servers pre-ranked at page load">
+                <Zap className="w-2.5 h-2.5" /> instant
+              </span>
+            )}
+          </div>
+          {/* Mobile-only quick controls */}
+          <div className="flex items-center gap-1.5 md:hidden">
+            <button
+              onClick={forceReload}
+              className="p-2 bg-white/10 rounded-full text-white/60 hover:text-white transition-colors"
+              title="Reload player"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+            <button onClick={onClose} className="p-2 bg-white/10 rounded-full text-white transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
-        {/* Server buttons */}
-        <div className="flex items-center gap-1.5 overflow-x-auto">
+        {/* Row 2 (mobile) / middle (desktop): server buttons */}
+        <div className="flex-1 flex items-center gap-1.5 overflow-x-auto min-w-0">
           {checking ? (
             <span className="flex items-center gap-1.5 text-xs text-white/50">
               <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
@@ -554,7 +564,7 @@ function WatchModal({
                   : s.ok === true ? `${s.label} — ${s.latency_ms}ms`
                   : s.label
                 }
-                className={`flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-md shrink-0 transition-colors ${
+                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shrink-0 transition-colors ${
                   i === srcIdx
                     ? 'bg-primary text-white'
                     : s.ok === false
@@ -570,7 +580,8 @@ function WatchModal({
           )}
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Desktop-only right controls */}
+        <div className="hidden md:flex items-center gap-2 shrink-0">
           <button
             onClick={forceReload}
             className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white/60 hover:text-white transition-colors"
@@ -779,8 +790,8 @@ export default function MovieDetail() {
         <div className="absolute inset-0 bg-gradient-to-r from-black/95 via-black/60 to-black/10" />
         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
 
-        {/* ── Bottom content — two-column (meta left, actions right) ── */}
-        <div className="relative z-10 w-full px-6 md:px-14 pb-14 flex items-end justify-between gap-6">
+        {/* ── Bottom content — two-column on desktop, stacked on mobile ── */}
+        <div className="relative z-10 w-full px-5 md:px-14 pb-20 md:pb-14 flex items-end justify-between gap-6">
 
           {/* Left: metadata + title */}
           <div className="max-w-xl">
@@ -837,8 +848,8 @@ export default function MovieDetail() {
             <StarRatingWidget detailPath={detailPath} />
           </div>
 
-          {/* Right: action buttons — zone style */}
-          <div className="flex flex-col items-end gap-3 shrink-0">
+          {/* Right: action buttons — zone style — hidden on mobile (mobile uses sticky CTA) */}
+          <div className="hidden md:flex flex-col items-end gap-3 shrink-0">
             {/* Primary Watch Now — big red zone-style */}
             <button
               onClick={() => handleWatch()}
@@ -911,15 +922,46 @@ export default function MovieDetail() {
         </div>
       </div>
 
-      {/* ── Mobile sticky CTA ── */}
-      <div className="md:hidden fixed bottom-[56px] left-0 right-0 px-4 pb-2 pt-2 bg-gradient-to-t from-[#0a0a0a]/95 to-transparent z-30 pointer-events-none">
-        <button
-          onClick={() => handleWatch()}
-          className="pointer-events-auto w-full flex items-center justify-center gap-2 py-3 bg-primary text-white font-bold rounded-xl text-sm shadow-lg shadow-primary/30"
-        >
-          <Play className="w-4 h-4 fill-white" />
-          {streamData.is_series ? 'Watch Series' : 'Watch Now'}
-        </button>
+      {/* ── Mobile sticky action bar ── */}
+      <div className="md:hidden fixed bottom-[56px] left-0 right-0 px-4 pb-2 pt-2 bg-gradient-to-t from-[#0a0a0a] to-transparent z-30">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => handleWatch()}
+            className="flex-1 flex items-center justify-center gap-2 py-3 bg-primary text-white font-bold rounded-xl text-sm shadow-lg shadow-primary/30"
+          >
+            <Play className="w-4 h-4 fill-white" />
+            {streamData.is_series ? 'Watch Series' : 'Watch Now'}
+          </button>
+          <button
+            onClick={() => {
+              if (streamData.trailer?.url) setTrailerOpen(true);
+              else {
+                const q = encodeURIComponent(`${streamData.title}${year ? ` ${year}` : ''} official trailer`);
+                window.open(`https://www.youtube.com/results?search_query=${q}`, '_blank', 'noopener');
+              }
+            }}
+            className="flex items-center gap-1.5 px-4 py-3 bg-white/10 text-white rounded-xl text-sm font-medium border border-white/10"
+          >
+            <Film className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => toggleWatchlist({
+              detail_path: detailPath,
+              title: streamData.title,
+              poster_url: streamData.cover_url,
+              type: streamData.is_series ? 'series' : 'movie',
+              imdb_rating: streamData.imdb_rating,
+              year: streamData.release_date?.slice(0, 4),
+            })}
+            className={`p-3 rounded-xl border text-sm transition-colors ${
+              isInWatchlist(detailPath)
+                ? 'bg-primary/20 text-primary border-primary/40'
+                : 'bg-white/10 text-white border-white/10'
+            }`}
+          >
+            {isInWatchlist(detailPath) ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
 
       {/* ── Trailer modal ── */}
