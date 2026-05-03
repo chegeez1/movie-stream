@@ -213,11 +213,11 @@ function buildStaticSources(streamData: StreamData, ep = 1, season = 0): PlayerS
     if (streamData.is_series) {
       sources.push({ label: 'Server 1', url: `https://vidsrc.to/embed/tv/${imdb}/${se}/${ep}`, hasCoverStrips: false });
       sources.push({ label: 'Server 2', url: `https://vidsrc.me/embed/tv?imdb=${imdb}&season=${se}&episode=${ep}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 3', url: `https://embed.su/embed/tv/${imdb}/${se}/${ep}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 3', url: `https://player.autoembed.cc/embed/tv/${imdb}/${se}/${ep}`, hasCoverStrips: false });
     } else {
       sources.push({ label: 'Server 1', url: `https://vidsrc.to/embed/movie/${imdb}`, hasCoverStrips: false });
       sources.push({ label: 'Server 2', url: `https://vidsrc.me/embed/movie?imdb=${imdb}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 3', url: `https://embed.su/embed/movie/${imdb}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 3', url: `https://player.autoembed.cc/embed/movie/${imdb}`, hasCoverStrips: false });
     }
   }
 
