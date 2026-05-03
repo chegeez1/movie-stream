@@ -8,7 +8,7 @@ import { fetchPlay } from '@/lib/api';
 import { Layout } from '@/components/layout';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Play, X, Loader2, Info, Share2, Check, RefreshCw, Wifi, WifiOff, Zap, Bookmark, BookmarkCheck, Film, Star, Eye } from 'lucide-react';
+import { Play, X, Loader2, Info, Share2, Check, RefreshCw, Wifi, WifiOff, Zap, Bookmark, BookmarkCheck, Film, Star, Eye, Download } from 'lucide-react';
 import { useRatings } from '@/hooks/use-ratings';
 import { MovieCard, MovieCardSkeleton } from '@/components/movie-card';
 
@@ -43,6 +43,14 @@ function useNetworkStatus() {
   }, []);
 
   return { isOnline, justReconnected };
+}
+
+/* Build a download page URL from IMDB ID */
+function getDownloadUrl(imdbId: string | null | undefined, isSeries: boolean, season = 1, ep = 1): string | null {
+  if (!imdbId) return null;
+  return isSeries
+    ? `https://dl.vidsrc.icu/tv/${imdbId}/${season}/${ep}`
+    : `https://dl.vidsrc.icu/movie/${imdbId}`;
 }
 
 function useCopyLink(text: string) {
@@ -409,6 +417,17 @@ function WatchModal({
             {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Share2 className="w-3.5 h-3.5" />}
             {copied ? 'Copied!' : 'Share'}
           </button>
+          {getDownloadUrl(streamData.imdb_id, streamData.is_series, season, ep) && (
+            <a
+              href={getDownloadUrl(streamData.imdb_id, streamData.is_series, season, ep)!}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5"
+              title="Download this title"
+            >
+              <Download className="w-3.5 h-3.5" /> Download
+            </a>
+          )}
           <button onClick={onClose} className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors">
             <X className="w-5 h-5" />
           </button>
@@ -715,6 +734,19 @@ export default function MovieDetail() {
               >
                 {pageCopied ? <Check className="w-4 h-4 text-green-400" /> : <Share2 className="w-4 h-4" />}
               </button>
+
+              {/* Download */}
+              {getDownloadUrl(streamData.imdb_id, streamData.is_series) && (
+                <a
+                  href={getDownloadUrl(streamData.imdb_id, streamData.is_series)!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Download"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-medium border border-white/10"
+                >
+                  <Download className="w-4 h-4" /> Download
+                </a>
+              )}
             </div>
           </div>
         </div>
