@@ -238,30 +238,47 @@ function WatchModal({
   const [srcIdx, setSrcIdx]       = useState(0);
   const [loaded, setLoaded]       = useState(false);
   const [countdown, setCountdown] = useState(LOAD_TIMEOUT_SECS);
-  const [reloadKey, setReloadKey] = useState(0);
-  const { copied, copy }          = useCopyLink(shareUrl);
-  const iframeRef                 = React.useRef<HTMLIFrameElement>(null);
-  const manualRef                 = React.useRef(false);
-  const current                   = sources[srcIdx];
-  const hasMore                   = srcIdx < sources.length - 1;
-  const wasPreRanked              = !!preRanked;
-  const { isOnline, justReconnected } = useNetworkStatus();
+  const [reloadKey, setReloadKey]           = useState(0);
+  const [stuckAfterReconnect, setStuck]     = useState(false);
+  const { copied, copy }                    = useCopyLink(shareUrl);
+  const iframeRef                           = React.useRef<HTMLIFrameElement>(null);
+  const manualRef                           = React.useRef(false);
+  const current                             = sources[srcIdx];
+  const hasMore                             = srcIdx < sources.length - 1;
+  const wasPreRanked                        = !!preRanked;
+  const { isOnline, justReconnected }       = useNetworkStatus();
 
-  /* Auto-reload player when network reconnects */
+  /*
+   * On network reconnect — do NOT remount the iframe.
+   * Remounting destroys the browser's video buffer (everything pre-downloaded).
+   * Instead, just hide the offline overlay and let the embed player's HLS buffer
+   * resume naturally. After 8 s, if the user is still stuck, offer a reload.
+   */
   const wasOnlineRef = useRef(isOnline);
   useEffect(() => {
     if (!wasOnlineRef.current && isOnline) {
-      /* Small delay so the connection is stable before we reload */
-      const t = setTimeout(() => {
-        setLoaded(false);
-        setCountdown(LOAD_TIMEOUT_SECS);
-        manualRef.current = true;
-        setReloadKey(k => k + 1);
-      }, 800);
-      return () => clearTimeout(t);
+      setStuck(false);
+      const stuckTimer = setTimeout(() => setStuck(true), 8000);
+      return () => clearTimeout(stuckTimer);
+    }
+    if (wasOnlineRef.current && !isOnline) {
+      setStuck(false);          /* clear stuck state when going offline */
     }
     wasOnlineRef.current = isOnline;
   }, [isOnline]);
+
+  /* Clear stuck flag as soon as the iframe signals it loaded successfully */
+  useEffect(() => {
+    if (loaded) setStuck(false);
+  }, [loaded]);
+
+  const forceReload = () => {
+    setStuck(false);
+    setLoaded(false);
+    setCountdown(LOAD_TIMEOUT_SECS);
+    manualRef.current = true;
+    setReloadKey(k => k + 1);
+  };
 
   /* Keyboard close */
   useEffect(() => {
@@ -379,7 +396,7 @@ function WatchModal({
 
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={() => { manualRef.current = true; setLoaded(false); setCountdown(LOAD_TIMEOUT_SECS); }}
+            onClick={forceReload}
             className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white/60 hover:text-white transition-colors"
             title="Reload player"
           >
@@ -425,26 +442,42 @@ function WatchModal({
           </div>
         )}
 
-        {/* Offline overlay */}
+        {/* Offline overlay — iframe stays mounted to preserve its video buffer */}
         {!isOnline && (
-          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 bg-black/90 backdrop-blur-sm">
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 bg-black/92 backdrop-blur-sm">
             <WifiOff className="w-12 h-12 text-red-400" />
             <div className="text-center">
               <p className="text-white font-bold text-lg">No Internet Connection</p>
-              <p className="text-white/50 text-sm mt-1">Player will resume automatically when you're back online</p>
+              <p className="text-white/40 text-sm mt-1 max-w-xs">
+                Pre-buffered content may still be playing. Playback will resume automatically when you reconnect.
+              </p>
             </div>
           </div>
         )}
 
-        {/* Reconnected toast */}
-        {justReconnected && (
+        {/* Reconnected — player recovering from buffer */}
+        {justReconnected && isOnline && (
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 bg-green-500/90 backdrop-blur-sm text-white text-sm font-semibold px-5 py-2.5 rounded-full shadow-xl animate-in fade-in slide-in-from-bottom-4 duration-300">
             <Wifi className="w-4 h-4" />
-            Reconnected — reloading player…
+            Back online — resuming from buffer…
           </div>
         )}
 
-        {/* Iframe — hidden while checking/loading, fades in on load */}
+        {/* Stuck after reconnect — offer manual reload */}
+        {stuckAfterReconnect && isOnline && !justReconnected && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-black/90 border border-white/15 backdrop-blur-sm text-white text-sm px-5 py-3 rounded-2xl shadow-xl animate-in fade-in slide-in-from-bottom-4 duration-300">
+            <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />
+            <span className="text-white/70">Player seems stuck</span>
+            <button
+              onClick={forceReload}
+              className="bg-primary hover:bg-red-700 text-white font-semibold px-4 py-1.5 rounded-lg text-xs transition-colors"
+            >
+              Reload Player
+            </button>
+          </div>
+        )}
+
+        {/* Iframe — stays mounted through network drops to preserve video buffer */}
         {!checking && (
           <iframe
             ref={iframeRef}
