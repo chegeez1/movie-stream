@@ -415,6 +415,52 @@ function WatchModal({
     return () => { document.body.style.overflow = 'unset'; window.removeEventListener('keydown', onKey); };
   }, [onClose]);
 
+  /* ── Parent-page ad blocker ─────────────────────────────────────────────
+   * Iframe content (even cross-origin) can still navigate the parent via
+   * window.top.location. Block this at the parent-page level while the
+   * player is open, since our iframe-level injection can't reach here.
+   */
+  useEffect(() => {
+    const AD_HOSTS = [
+      'voluum','adcash','chatmate','popads','popcash','adsterra',
+      'propellerads','hilltopads','exoclick','trafficjunky','juicyads',
+      'plugrush','v2006','adex','afu.php','mgid','revcontent',
+      'outbrain','taboola','bidvertiser','zedo',
+    ];
+    const isAd = (u: string) => AD_HOSTS.some(d => u.includes(d));
+
+    // Kill window.open in parent context
+    const origOpen = window.open;
+    (window as Window).open = () => null;
+
+    // Intercept beforeunload to detect ad-triggered navigations
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      // We can't reliably cancel navigation but we can log it
+      // The real block is the nginx CSP header
+      e.preventDefault();
+    };
+
+    // Block clicks on any dynamically injected ad anchors
+    const onDocClick = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      let el: HTMLElement | null = t;
+      for (let i = 0; i < 8 && el; i++, el = el.parentElement) {
+        const href = (el as HTMLAnchorElement).href ?? el.getAttribute('href') ?? '';
+        if (href && isAd(href)) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+          return;
+        }
+      }
+    };
+    document.addEventListener('click', onDocClick, true);
+
+    return () => {
+      (window as Window).open = origOpen;
+      document.removeEventListener('click', onDocClick, true);
+    };
+  }, []);
+
   /* ── Fetch ranked servers when not pre-loaded ── */
   useEffect(() => {
     if (!checking) return;
