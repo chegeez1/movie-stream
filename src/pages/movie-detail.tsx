@@ -189,35 +189,38 @@ interface PlayerSource {
   latency_ms?: number;
 }
 
+/* Build the proxy source URL (our clean ad-blocked player — always first) */
+function buildProxySource(streamData: StreamData, ep = 1, season = 0): PlayerSource | null {
+  const base = streamData.player?.embed_url ?? '';
+  if (!base) return null;
+  const u = new URL(base.startsWith('http') ? base : `${window.location.origin}${base}`);
+  u.searchParams.set('ep', String(ep));
+  if (season) u.searchParams.set('se', String(season)); else u.searchParams.delete('se');
+  return { label: 'Server 4', url: u.toString(), hasCoverStrips: true };
+}
+
 /* Fallback static sources (used while API check is in-flight or if no IMDB ID) */
 function buildStaticSources(streamData: StreamData, ep = 1, season = 0): PlayerSource[] {
   const sources: PlayerSource[] = [];
   const imdb = streamData.imdb_id;
   const se = season > 0 ? season : 1;
 
+  // Our proxy is ALWAYS first — it's ad-blocked and we control it
+  const proxy = buildProxySource(streamData, ep, season);
+  if (proxy) sources.push(proxy);
+
   if (imdb) {
     if (streamData.is_series) {
       sources.push({ label: 'Server 1', url: `https://vidsrc.to/embed/tv/${imdb}/${se}/${ep}`, hasCoverStrips: false });
       sources.push({ label: 'Server 2', url: `https://vidsrc.me/embed/tv?imdb=${imdb}&season=${se}&episode=${ep}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 3', url: `https://www.2embed.cc/embedtv/${imdb}&s=${se}&e=${ep}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 4', url: `https://multiembed.mov/?video_id=${imdb}&tmdb=0&s=${se}&e=${ep}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 3', url: `https://embed.su/embed/tv/${imdb}/${se}/${ep}`, hasCoverStrips: false });
     } else {
       sources.push({ label: 'Server 1', url: `https://vidsrc.to/embed/movie/${imdb}`, hasCoverStrips: false });
       sources.push({ label: 'Server 2', url: `https://vidsrc.me/embed/movie?imdb=${imdb}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 3', url: `https://www.2embed.cc/embed/${imdb}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 4', url: `https://multiembed.mov/?video_id=${imdb}&tmdb=0`, hasCoverStrips: false });
+      sources.push({ label: 'Server 3', url: `https://embed.su/embed/movie/${imdb}`, hasCoverStrips: false });
     }
-    return sources;
   }
 
-  /* No IMDB ID — proxy fallback */
-  const base = streamData.player?.embed_url ?? '';
-  if (base) {
-    const u = new URL(base.startsWith('http') ? base : `${window.location.origin}${base}`);
-    u.searchParams.set('ep', String(ep));
-    if (season) u.searchParams.set('se', String(season)); else u.searchParams.delete('se');
-    sources.push({ label: 'Server 1', url: u.toString(), hasCoverStrips: true });
-  }
   return sources;
 }
 
@@ -419,7 +422,10 @@ function WatchModal({
       .then(res => {
         const ranked = res.servers?.servers;
         if (ranked && ranked.length > 0) {
-          setSources(rankedToSources(ranked));
+          // Always keep our proxy first, then append external ranked servers
+          const proxy = buildProxySource(streamData, ep, season);
+          const external = rankedToSources(ranked).filter(s => s.label !== 'Server 4');
+          setSources(proxy ? [proxy, ...external] : rankedToSources(ranked));
           setSrcIdx(0);
         }
       })
