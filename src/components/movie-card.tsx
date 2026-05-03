@@ -110,13 +110,13 @@ export function MovieCard({ movie, index = 0 }: { movie: Movie; index?: number }
             </div>
           </div>
 
-          {/* Bookmark button — top-left, visible on hover */}
+          {/* Bookmark button — always visible on touch, hover on desktop */}
           <button
             onClick={handleBookmark}
             className={`absolute top-1.5 left-1.5 w-6 h-6 rounded-full flex items-center justify-center transition-all z-10 ${
               bookmarked
                 ? 'bg-primary text-white opacity-100'
-                : 'bg-black/60 text-white/70 opacity-0 group-hover:opacity-100 hover:bg-primary/80 hover:text-white'
+                : 'bg-black/60 text-white/70 opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:bg-primary/80 hover:text-white'
             }`}
             title={bookmarked ? 'Remove from watchlist' : 'Add to watchlist'}
           >
