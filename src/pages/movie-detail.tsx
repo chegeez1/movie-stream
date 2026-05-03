@@ -45,12 +45,12 @@ function useNetworkStatus() {
   return { isOnline, justReconnected };
 }
 
-/* Build a download page URL from IMDB ID */
-function getDownloadUrl(imdbId: string | null | undefined, isSeries: boolean, season = 1, ep = 1): string | null {
-  if (!imdbId) return null;
+/* Build a download URL through our own API */
+function getDownloadUrl(detailPath: string, isSeries: boolean, season = 1, ep = 1): string {
+  const base = 'https://movieapi.nasotc.com/download';
   return isSeries
-    ? `https://dl.vidsrc.icu/tv/${imdbId}/${season}/${ep}`
-    : `https://dl.vidsrc.icu/movie/${imdbId}`;
+    ? `${base}/${detailPath}?ep=${ep}&season=${season}&resolution=1080`
+    : `${base}/${detailPath}?resolution=1080`;
 }
 
 function useCopyLink(text: string) {
@@ -417,17 +417,15 @@ function WatchModal({
             {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Share2 className="w-3.5 h-3.5" />}
             {copied ? 'Copied!' : 'Share'}
           </button>
-          {getDownloadUrl(streamData.imdb_id, streamData.is_series, season, ep) && (
-            <a
-              href={getDownloadUrl(streamData.imdb_id, streamData.is_series, season, ep)!}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5"
-              title="Download this title"
-            >
-              <Download className="w-3.5 h-3.5" /> Download
-            </a>
-          )}
+          <a
+            href={getDownloadUrl(detailPath, streamData.is_series, season, ep)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5"
+            title="Download this title"
+          >
+            <Download className="w-3.5 h-3.5" /> Download
+          </a>
           <button onClick={onClose} className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors">
             <X className="w-5 h-5" />
           </button>
@@ -736,17 +734,15 @@ export default function MovieDetail() {
               </button>
 
               {/* Download */}
-              {getDownloadUrl(streamData.imdb_id, streamData.is_series) && (
-                <a
-                  href={getDownloadUrl(streamData.imdb_id, streamData.is_series)!}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title="Download"
-                  className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-medium border border-white/10"
-                >
-                  <Download className="w-4 h-4" /> Download
-                </a>
-              )}
+              <a
+                href={getDownloadUrl(detailPath, streamData.is_series)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Download"
+                className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-medium border border-white/10"
+              >
+                <Download className="w-4 h-4" /> Download
+              </a>
             </div>
           </div>
         </div>
