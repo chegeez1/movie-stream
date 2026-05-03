@@ -1,0 +1,726 @@
+import React, { useState, useEffect } from 'react';
+import { useRoute, Link } from 'wouter';
+import { usePlayData, useSimilar } from '@/hooks/use-movies';
+import { useWatchHistory } from '@/hooks/use-watch-history';
+import { useWatchlist } from '@/hooks/use-watchlist';
+import type { StreamData, ServerResult } from '@/lib/api';
+import { fetchPlay } from '@/lib/api';
+import { Layout } from '@/components/layout';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Play, X, Loader2, Info, Share2, Check, RefreshCw, Wifi, WifiOff, Zap, Bookmark, BookmarkCheck, Film, Star, Eye } from 'lucide-react';
+import { useRatings } from '@/hooks/use-ratings';
+import { MovieCard, MovieCardSkeleton } from '@/components/movie-card';
+
+function useCopyLink(text: string) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return { copied, copy };
+}
+
+/* ─── Player sources ──────────────────────────────────────────────────── */
+interface PlayerSource {
+  label: string;
+  url: string;
+  hasCoverStrips: boolean;
+  ok?: boolean;        /* undefined = unchecked, true = working, false = failed */
+  latency_ms?: number;
+}
+
+/* Fallback static sources (used while API check is in-flight or if no IMDB ID) */
+function buildStaticSources(streamData: StreamData, ep = 1, season = 0): PlayerSource[] {
+  const sources: PlayerSource[] = [];
+  const imdb = streamData.imdb_id;
+  const se = season > 0 ? season : 1;
+
+  if (imdb) {
+    if (streamData.is_series) {
+      sources.push({ label: 'Server 1', url: `https://vidsrc.to/embed/tv/${imdb}/${se}/${ep}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 2', url: `https://vidsrc.me/embed/tv?imdb=${imdb}&season=${se}&episode=${ep}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 3', url: `https://www.2embed.cc/embedtv/${imdb}&s=${se}&e=${ep}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 4', url: `https://multiembed.mov/?video_id=${imdb}&tmdb=0&s=${se}&e=${ep}`, hasCoverStrips: false });
+    } else {
+      sources.push({ label: 'Server 1', url: `https://vidsrc.to/embed/movie/${imdb}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 2', url: `https://vidsrc.me/embed/movie?imdb=${imdb}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 3', url: `https://www.2embed.cc/embed/${imdb}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 4', url: `https://multiembed.mov/?video_id=${imdb}&tmdb=0`, hasCoverStrips: false });
+    }
+    return sources;
+  }
+
+  /* No IMDB ID — proxy fallback */
+  const base = streamData.player?.embed_url ?? '';
+  if (base) {
+    const u = new URL(base.startsWith('http') ? base : `${window.location.origin}${base}`);
+    u.searchParams.set('ep', String(ep));
+    if (season) u.searchParams.set('se', String(season)); else u.searchParams.delete('se');
+    sources.push({ label: 'Server 1', url: u.toString(), hasCoverStrips: true });
+  }
+  return sources;
+}
+
+/* Merge API-ranked results back into PlayerSource shape */
+function rankedToSources(ranked: ServerResult[]): PlayerSource[] {
+  return ranked.map(s => ({ label: s.label, url: s.url, hasCoverStrips: false, ok: s.ok, latency_ms: s.latency_ms }));
+}
+
+/* ─── Star Rating Widget ─────────────────────────────────────────────── */
+function StarRatingWidget({ detailPath }: { detailPath: string }) {
+  const { getRating, rate } = useRatings();
+  const myRating = getRating(detailPath);
+  const [hovered, setHovered] = useState(0);
+
+  return (
+    <div className="flex items-center gap-3 mb-5">
+      <span className="text-xs text-white/40 font-medium">Your Rating:</span>
+      <div className="flex items-center gap-0.5">
+        {[1, 2, 3, 4, 5].map(s => (
+          <button
+            key={s}
+            onClick={() => rate(detailPath, s === myRating ? 0 : s)}
+            onMouseEnter={() => setHovered(s)}
+            onMouseLeave={() => setHovered(0)}
+            className="p-0.5 hover:scale-110 transition-transform"
+            title={`Rate ${s} star${s !== 1 ? 's' : ''}`}
+          >
+            <Star className={`w-5 h-5 transition-colors ${
+              s <= (hovered || myRating)
+                ? 'fill-yellow-400 text-yellow-400'
+                : 'fill-transparent text-white/20 hover:text-yellow-300'
+            }`} />
+          </button>
+        ))}
+      </div>
+      {myRating > 0 && (
+        <span className="text-xs text-yellow-400 font-bold">{myRating}/5</span>
+      )}
+    </div>
+  );
+}
+
+/* ─── Mark as Watched Button ─────────────────────────────────────────── */
+function MarkWatchedButton({ detailPath, streamData }: { detailPath: string; streamData: StreamData }) {
+  const { addToHistory } = useWatchHistory();
+  const [done, setDone] = useState(false);
+
+  const markWatched = () => {
+    addToHistory({
+      detail_path: detailPath,
+      title: streamData.title,
+      poster_url: streamData.cover_url,
+      type: streamData.is_series ? 'series' : 'movie',
+      ep: 1,
+      season: 1,
+    });
+    setDone(true);
+    setTimeout(() => setDone(false), 2500);
+  };
+
+  return (
+    <button
+      onClick={markWatched}
+      className={`flex items-center gap-2 px-5 py-3 font-semibold rounded-lg transition-all backdrop-blur-sm text-sm border ${
+        done
+          ? 'bg-green-500/20 text-green-400 border-green-500/30'
+          : 'bg-white/15 text-white border-white/10 hover:bg-white/25'
+      }`}
+      title="Mark as watched without playing"
+    >
+      {done ? <Check className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+      {done ? 'Marked!' : 'Watched'}
+    </button>
+  );
+}
+
+/* ─── Watch Modal ────────────────────────────────────────────────────────
+   Full-screen player with a source switcher toolbar.
+──────────────────────────────────────────────────────────────────────── */
+function injectPlayerCleanup(iframe: HTMLIFrameElement) {
+  try {
+    const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
+    if (!doc || !doc.body) return false;
+    const video = doc.querySelector('video');
+    if (!video) return false;
+    let container: HTMLElement = video as HTMLElement;
+    while (
+      container.parentElement &&
+      container.parentElement.id !== 'app' &&
+      container.parentElement !== doc.body
+    ) {
+      container = container.parentElement;
+    }
+    container.style.cssText =
+      'position:fixed!important;top:0!important;left:0!important;' +
+      'width:100%!important;height:100%!important;z-index:50!important;' +
+      'overflow:hidden!important;background:#000!important;';
+    if (container.parentElement) {
+      for (const child of container.parentElement.children) {
+        if (child !== container) {
+          (child as HTMLElement).style.setProperty('display', 'none', 'important');
+        }
+      }
+    }
+    doc.querySelectorAll('iframe').forEach(f => {
+      f.style.setProperty('display', 'none', 'important');
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* How long to wait for the iframe to fire onLoad before giving up and switching servers */
+const LOAD_TIMEOUT_SECS = 18;
+
+interface WatchConfig {
+  streamData: StreamData;
+  detailPath: string;
+  ep: number;
+  season: number;
+  /** Pre-ranked sources from the combined /play/ endpoint (instant if cached). null = needs fetching. */
+  preRanked: PlayerSource[] | null;
+}
+
+function WatchModal({
+  config,
+  shareUrl,
+  onClose,
+}: {
+  config: WatchConfig;
+  shareUrl: string;
+  onClose: () => void;
+}) {
+  const { streamData, detailPath, ep, season, preRanked } = config;
+
+  const [sources, setSources]     = useState<PlayerSource[]>(
+    preRanked ?? buildStaticSources(streamData, ep, season),
+  );
+  /* checking = we need to fetch ranked servers (no preRanked, and IMDB ID exists) */
+  const [checking, setChecking]   = useState(!preRanked && !!streamData.imdb_id);
+  const [srcIdx, setSrcIdx]       = useState(0);
+  const [loaded, setLoaded]       = useState(false);
+  const [countdown, setCountdown] = useState(LOAD_TIMEOUT_SECS);
+  const { copied, copy }          = useCopyLink(shareUrl);
+  const iframeRef                 = React.useRef<HTMLIFrameElement>(null);
+  const manualRef                 = React.useRef(false);
+  const current                   = sources[srcIdx];
+  const hasMore                   = srcIdx < sources.length - 1;
+  const wasPreRanked              = !!preRanked;
+
+  /* Keyboard close */
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = 'unset'; window.removeEventListener('keydown', onKey); };
+  }, [onClose]);
+
+  /* ── Fetch ranked servers when not pre-loaded ── */
+  useEffect(() => {
+    if (!checking) return;
+    fetchPlay(detailPath, ep, season)
+      .then(res => {
+        const ranked = res.servers?.servers;
+        if (ranked && ranked.length > 0) {
+          setSources(rankedToSources(ranked));
+          setSrcIdx(0);
+        }
+      })
+      .catch(() => { /* keep static fallback on error */ })
+      .finally(() => setChecking(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Reset iframe state when source index changes */
+  useEffect(() => {
+    setLoaded(false);
+    setCountdown(LOAD_TIMEOUT_SECS);
+    manualRef.current = false;
+  }, [srcIdx]);
+
+  /*
+   * Countdown: only while iframe hasn't loaded yet.
+   * onLoad fires → loaded=true → effect re-runs, returns early → no switch.
+   * Never fires within LOAD_TIMEOUT_SECS → auto-switch to next server.
+   */
+  useEffect(() => {
+    if (checking || loaded) return;
+    let remaining = LOAD_TIMEOUT_SECS;
+    const tick = setInterval(() => {
+      remaining -= 1;
+      setCountdown(remaining);
+      if (remaining <= 0) {
+        clearInterval(tick);
+        if (!manualRef.current && hasMore) setSrcIdx(i => i + 1);
+      }
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [srcIdx, loaded, hasMore, checking]);
+
+  /* For proxy sources: poll + inject cleanup CSS after load */
+  useEffect(() => {
+    if (!current?.hasCoverStrips || !loaded) return;
+    let attempts = 0;
+    const id = setInterval(() => {
+      const iframe = iframeRef.current;
+      if (iframe && injectPlayerCleanup(iframe)) { clearInterval(id); return; }
+      if (++attempts >= 60) clearInterval(id);
+    }, 300);
+    return () => clearInterval(id);
+  }, [srcIdx, current?.hasCoverStrips, loaded]);
+
+  if (!current) return null;
+
+  const handleManualSwitch = (i: number) => {
+    manualRef.current = true;
+    setSrcIdx(i);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black flex flex-col">
+      {/* ── Topbar ── */}
+      <div className="flex items-center justify-between px-4 py-2 bg-black shrink-0 z-20 border-b border-white/10 gap-3">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-sm font-black text-primary tracking-widest">CHEGEMOVIES</span>
+          {wasPreRanked && (
+            <span className="flex items-center gap-0.5 text-[10px] text-green-400/80 font-semibold" title="Servers pre-ranked at page load">
+              <Zap className="w-2.5 h-2.5" /> instant
+            </span>
+          )}
+        </div>
+
+        {/* Server buttons */}
+        <div className="flex items-center gap-1.5 overflow-x-auto">
+          {checking ? (
+            <span className="flex items-center gap-1.5 text-xs text-white/50">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+              Ranking servers…
+            </span>
+          ) : (
+            sources.map((s, i) => (
+              <button
+                key={i}
+                onClick={() => handleManualSwitch(i)}
+                title={
+                  s.ok === false ? `${s.label} — unavailable`
+                  : s.ok === true ? `${s.label} — ${s.latency_ms}ms`
+                  : s.label
+                }
+                className={`flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-md shrink-0 transition-colors ${
+                  i === srcIdx
+                    ? 'bg-primary text-white'
+                    : s.ok === false
+                      ? 'bg-white/5 text-white/30 hover:bg-white/10 line-through'
+                      : 'bg-white/10 text-white/60 hover:bg-white/20 hover:text-white'
+                }`}
+              >
+                {s.ok === true  && i !== srcIdx && <Wifi    className="w-2.5 h-2.5 text-green-400" />}
+                {s.ok === false                  && <WifiOff className="w-2.5 h-2.5 text-red-400/60" />}
+                {s.label}
+              </button>
+            ))
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => { manualRef.current = true; setLoaded(false); setCountdown(LOAD_TIMEOUT_SECS); }}
+            className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white/60 hover:text-white transition-colors"
+            title="Reload player"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+          <button
+            onClick={copy}
+            className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5"
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Share2 className="w-3.5 h-3.5" />}
+            {copied ? 'Copied!' : 'Share'}
+          </button>
+          <button onClick={onClose} className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Player ── */}
+      <div className="relative flex-1 overflow-hidden bg-black">
+
+        {/* Fetching ranked servers (only when not pre-loaded) */}
+        {checking && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10">
+            <Loader2 className="w-10 h-10 animate-spin text-primary" />
+            <div className="text-center">
+              <p className="text-white font-semibold text-sm">Finding best server…</p>
+              <p className="text-white/40 text-xs mt-1">Checking all servers in parallel</p>
+            </div>
+          </div>
+        )}
+
+        {/* Waiting for iframe to load */}
+        {!checking && !loaded && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-10 pointer-events-none">
+            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+            <span className="text-sm text-white/70">Loading {current.label}…</span>
+            {hasMore && (
+              <span className="text-xs text-white/35">
+                Trying next server in <span className="text-primary font-semibold">{countdown}s</span>
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Iframe — hidden while checking/loading, fades in on load */}
+        {!checking && (
+          <iframe
+            ref={iframeRef}
+            key={`${srcIdx}-${current.url}`}
+            src={current.url}
+            className={`absolute inset-0 w-full h-full border-0 transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            allowFullScreen
+            referrerPolicy="no-referrer"
+            title="Movie Player"
+            data-testid="iframe-player"
+            onLoad={() => setLoaded(true)}
+          />
+        )}
+
+        {/* Cover strips for proxy sources */}
+        {current.hasCoverStrips && loaded && (
+          <>
+            <div className="absolute top-0 left-0 right-0 h-10 bg-black pointer-events-none z-20" />
+            <div className="absolute top-0 right-0 bottom-0 w-[30%] bg-black pointer-events-none z-20" />
+            <div className="absolute bottom-0 left-0 right-[30%] h-[52%] bg-black pointer-events-none z-20" />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Movie Detail Page ───────────────────────────────────────────────── */
+export default function MovieDetail() {
+  const [, params] = useRoute('/movie/:detailPath');
+  const detailPath = params?.detailPath ? decodeURIComponent(params.detailPath) : '';
+
+  /* usePlayData = stream metadata + pre-ranked servers in one request */
+  const { data: playData, isLoading, error } = usePlayData(detailPath);
+  const streamData = playData?.stream ?? null;
+  const { data: similarData, isLoading: similarLoading } = useSimilar(detailPath, 14);
+  const { addToHistory } = useWatchHistory();
+  const { toggleWatchlist, isInWatchlist } = useWatchlist();
+
+  const [watchConfig,    setWatchConfig]    = useState<WatchConfig | null>(null);
+  const [trailerOpen,    setTrailerOpen]    = useState(false);
+  const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
+  const { copied: pageCopied, copy: copyPageLink } = useCopyLink(pageUrl);
+
+  if (isLoading) {
+    return (
+      <Layout>
+        <div className="flex-1 flex items-center justify-center min-h-screen">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        </div>
+      </Layout>
+    );
+  }
+
+  if (error || !streamData) {
+    return (
+      <Layout>
+        <div className="flex-1 flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
+          <Info className="w-12 h-12 text-destructive mb-4" />
+          <h1 className="text-2xl font-bold mb-2">Title Not Found</h1>
+          <p className="text-muted-foreground">We couldn't load the details for this title.</p>
+        </div>
+      </Layout>
+    );
+  }
+
+  const handleWatch = (epNum = 1, seasonNum = 0) => {
+    if (!streamData) return;
+    const isDefault = epNum === 1 && (seasonNum === 0 || seasonNum === 1);
+    const preRanked = isDefault && playData?.servers?.servers
+      ? rankedToSources(playData.servers.servers)
+      : null;
+    addToHistory({
+      detail_path: detailPath,
+      title: streamData.title,
+      poster_url: streamData.cover_url,
+      type: streamData.is_series ? 'series' : 'movie',
+      ep: epNum,
+      season: seasonNum || 1,
+    });
+    setWatchConfig({ streamData, detailPath, ep: epNum, season: seasonNum, preRanked });
+  };
+
+  const backdrop = streamData.stills_url || streamData.cover_url || streamData.trailer?.thumbnail;
+  const genres = streamData.genre
+    ? streamData.genre.split(',').map((g: string) => g.trim()).filter(Boolean)
+    : [];
+  const year = streamData.release_date ? streamData.release_date.slice(0, 4) : null;
+
+  return (
+    <Layout>
+      {watchConfig && (
+        <WatchModal
+          config={watchConfig}
+          shareUrl={pageUrl}
+          onClose={() => setWatchConfig(null)}
+        />
+      )}
+
+      {/* ── Hero — zone.bwmxmd.co.ke style ── */}
+      <div className="relative w-full h-screen min-h-[600px] flex items-end">
+        {/* Backdrop */}
+        {backdrop ? (
+          <img
+            src={backdrop}
+            alt={streamData.title}
+            className="absolute inset-0 w-full h-full object-cover object-top"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-[#111]" />
+        )}
+
+        {/* Cinematic gradients */}
+        <div className="absolute inset-0 bg-gradient-to-r from-black/95 via-black/60 to-black/10" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
+
+        {/* ── Bottom content — two-column (meta left, actions right) ── */}
+        <div className="relative z-10 w-full px-6 md:px-14 pb-14 flex items-end justify-between gap-6">
+
+          {/* Left: metadata + title */}
+          <div className="max-w-xl">
+            {/* Badges row */}
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className={`text-[11px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${
+                streamData.is_series ? 'bg-violet-600 text-white' : 'bg-red-600 text-white'
+              }`}>
+                {streamData.is_series ? 'SERIES' : 'MOVIE'}
+              </span>
+              {year && (
+                <span className="text-sm font-semibold text-white/70">{year}</span>
+              )}
+              {streamData.imdb_rating && (
+                <span className="flex items-center gap-1 text-sm font-bold text-yellow-400">
+                  <Star className="w-3.5 h-3.5 fill-yellow-400" />
+                  {streamData.imdb_rating}
+                </span>
+              )}
+              {streamData.country && (
+                <span className="text-xs text-white/40 font-medium">{streamData.country}</span>
+              )}
+            </div>
+
+            {/* Title */}
+            <h1 className="text-4xl md:text-[3.25rem] font-black text-white leading-tight mb-2.5 drop-shadow-lg">
+              {streamData.title}
+            </h1>
+
+            {/* Genres — dot separated like zone */}
+            {genres.length > 0 && (
+              <p className="text-[13px] text-white/50 font-medium mb-4 tracking-wide">
+                {genres.slice(0, 4).map((g, i) => (
+                  <React.Fragment key={g}>
+                    <Link href={`/browse/all?genre=${encodeURIComponent(g)}`}>
+                      <span className="hover:text-white transition-colors cursor-pointer">{g}</span>
+                    </Link>
+                    {i < Math.min(genres.length, 4) - 1 && (
+                      <span className="mx-1.5 text-white/25">•</span>
+                    )}
+                  </React.Fragment>
+                ))}
+              </p>
+            )}
+
+            {/* Description */}
+            {streamData.description && (
+              <p className="text-sm text-white/60 line-clamp-3 leading-relaxed max-w-md mb-6">
+                {streamData.description}
+              </p>
+            )}
+
+            {/* Star rating */}
+            <StarRatingWidget detailPath={detailPath} />
+          </div>
+
+          {/* Right: action buttons — zone style */}
+          <div className="flex flex-col items-end gap-3 shrink-0">
+            {/* Primary Watch Now — big red zone-style */}
+            <button
+              onClick={() => handleWatch()}
+              data-testid="button-watch-now"
+              className="flex items-center gap-3 px-8 py-4 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl transition-all text-base shadow-2xl shadow-red-900/50 hover:scale-[1.03] active:scale-100"
+            >
+              <Play className="w-5 h-5 fill-white" />
+              {streamData.is_series ? 'Watch Series' : 'Watch Now'}
+            </button>
+
+            {/* Secondary actions row */}
+            <div className="flex items-center gap-2">
+              {/* Trailer */}
+              <button
+                onClick={() => {
+                  if (streamData.trailer?.url) {
+                    setTrailerOpen(true);
+                  } else {
+                    const q = encodeURIComponent(`${streamData.title}${year ? ` ${year}` : ''} official trailer`);
+                    window.open(`https://www.youtube.com/results?search_query=${q}`, '_blank', 'noopener');
+                  }
+                }}
+                title="Trailer"
+                className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-medium border border-white/10"
+              >
+                <Film className="w-4 h-4" /> Trailer
+              </button>
+
+              {/* Watchlist */}
+              <button
+                onClick={() => toggleWatchlist({
+                  detail_path: detailPath,
+                  title:       streamData.title,
+                  poster_url:  streamData.cover_url,
+                  type:        streamData.is_series ? 'series' : 'movie',
+                  imdb_rating: streamData.imdb_rating,
+                  year:        streamData.release_date?.slice(0, 4),
+                })}
+                title={isInWatchlist(detailPath) ? 'Remove from watchlist' : 'Add to watchlist'}
+                className={`p-2.5 rounded-lg transition-colors backdrop-blur-sm border ${
+                  isInWatchlist(detailPath)
+                    ? 'bg-primary/20 text-primary border-primary/40 hover:bg-primary/30'
+                    : 'bg-white/10 text-white border-white/10 hover:bg-white/20'
+                }`}
+              >
+                {isInWatchlist(detailPath) ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
+              </button>
+
+              {/* Mark Watched */}
+              <MarkWatchedButton detailPath={detailPath} streamData={streamData} />
+
+              {/* Share */}
+              <button
+                onClick={copyPageLink}
+                data-testid="button-share"
+                title="Copy link"
+                className="p-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm border border-white/10"
+              >
+                {pageCopied ? <Check className="w-4 h-4 text-green-400" /> : <Share2 className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Mobile sticky CTA ── */}
+      <div className="md:hidden fixed bottom-[56px] left-0 right-0 px-4 pb-2 pt-2 bg-gradient-to-t from-[#0a0a0a]/95 to-transparent z-30 pointer-events-none">
+        <button
+          onClick={() => handleWatch()}
+          className="pointer-events-auto w-full flex items-center justify-center gap-2 py-3 bg-primary text-white font-bold rounded-xl text-sm shadow-lg shadow-primary/30"
+        >
+          <Play className="w-4 h-4 fill-white" />
+          {streamData.is_series ? 'Watch Series' : 'Watch Now'}
+        </button>
+      </div>
+
+      {/* ── Trailer modal ── */}
+      {trailerOpen && streamData.trailer?.url && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm px-4">
+          <div className="relative w-full max-w-3xl rounded-xl overflow-hidden shadow-2xl">
+            <div className="aspect-video w-full bg-black">
+              <iframe
+                src={streamData.trailer.url}
+                className="w-full h-full"
+                allow="autoplay; fullscreen"
+                allowFullScreen
+                title={`${streamData.title} — Trailer`}
+              />
+            </div>
+            <button
+              onClick={() => setTrailerOpen(false)}
+              className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/70 text-white flex items-center justify-center hover:bg-white/20 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Body ── */}
+      <div className="px-6 md:px-14 pb-24 -mt-4 relative z-10">
+
+        {/* ── Episodes ── */}
+        {streamData.is_series && streamData.seasons?.length > 0 && (
+          <div className="mb-14">
+            <h2 className="text-xl font-bold mb-5 text-white">Episodes</h2>
+            <Tabs defaultValue={streamData.seasons[0].season.toString()}>
+              <ScrollArea className="w-full mb-5">
+                <TabsList className="bg-transparent border-b border-white/10 rounded-none h-auto p-0 w-max space-x-6">
+                  {streamData.seasons.map((season: { season: number; episode_count: number }) => (
+                    <TabsTrigger
+                      key={season.season}
+                      value={season.season.toString()}
+                      className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-0 py-3 text-sm text-white/60 data-[state=active]:text-white"
+                    >
+                      Season {season.season}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </ScrollArea>
+
+              {streamData.seasons.map((season: { season: number; episode_count: number }) => (
+                <TabsContent key={season.season} value={season.season.toString()} className="mt-0">
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 gap-2.5">
+                    {Array.from({ length: season.episode_count }).map((_, i) => {
+                      const epNum = i + 1;
+                      return (
+                        <button
+                          key={epNum}
+                          onClick={() => handleWatch(epNum, season.season)}
+                          className="flex items-center justify-between p-3.5 rounded-xl bg-white/5 border border-white/10 hover:border-primary/50 hover:bg-primary/10 transition-colors group text-left"
+                          data-testid={`button-watch-ep-${epNum}`}
+                        >
+                          <span className="font-medium text-white/70 group-hover:text-white text-xs">
+                            Ep {epNum}
+                          </span>
+                          <Play className="w-3 h-3 text-primary opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </TabsContent>
+              ))}
+            </Tabs>
+          </div>
+        )}
+
+        {/* ── Similar Titles ── */}
+        <div>
+          <div className="flex items-center gap-2 mb-5">
+            <h2 className="text-lg font-bold text-white/90">More Like This</h2>
+            {similarData?.based_on && similarData.based_on.length > 0 && (
+              <span className="text-xs text-white/35 font-medium">
+                based on {similarData.based_on.slice(0, 2).join(', ')}
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 gap-3">
+            {similarLoading
+              ? Array.from({ length: 7 }).map((_, i) => <MovieCardSkeleton key={i} />)
+              : similarData?.similar?.length
+                ? similarData.similar.map((movie: any, i: number) => (
+                    <MovieCard key={movie.id} movie={movie} index={i} />
+                  ))
+                : <p className="text-muted-foreground col-span-full text-sm">No similar titles found.</p>
+            }
+          </div>
+        </div>
+      </div>
+    </Layout>
+  );
+}
