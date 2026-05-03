@@ -118,7 +118,7 @@ export default function SearchPage() {
 
   return (
     <Layout>
-      <div className="container mx-auto px-4 py-8 max-w-6xl flex-1 flex flex-col">
+      <div className="container mx-auto px-4 pt-4 pb-24 md:py-8 max-w-6xl flex-1 flex flex-col">
 
         {/* Search bar */}
         <div className="relative w-full max-w-2xl mx-auto mb-8">
