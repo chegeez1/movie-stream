@@ -46,9 +46,12 @@ function useNetworkStatus() {
 }
 
 /* ─── Download panel ─────────────────────────────────────────────────────
-   Shows a quality-selector dropdown. Checks /download-info first (fast),
-   then triggers a browser download — no new tab, no about:blank.
+   Quality-selector dropdown. Checks /download-info (fast probe), then
+   triggers a browser MP4 download. HLS sources are remuxed server-side
+   via ffmpeg — always delivers a real .mp4 file.
 ──────────────────────────────────────────────────────────────────────── */
+type DlState = 'idle' | 'checking' | 'converting' | 'downloading' | 'done' | 'error';
+
 function DownloadPanel({
   detailPath,
   isSeries,
@@ -65,9 +68,9 @@ function DownloadPanel({
   compact?: boolean;
 }) {
   const [open, setOpen]       = useState(false);
-  const [busy, setBusy]       = useState<number | null>(null);
+  const [busyQ, setBusyQ]     = useState<number | null>(null);
+  const [state, setState]     = useState<DlState>('idle');
   const [msg, setMsg]         = useState('');
-  const [isErr, setIsErr]     = useState(false);
   const panelRef              = useRef<HTMLDivElement>(null);
 
   // Close on outside click
@@ -82,87 +85,142 @@ function DownloadPanel({
   }, [open]);
 
   const trigger = async (resolution: number) => {
-    setBusy(resolution);
+    setBusyQ(resolution);
+    setState('checking');
     setMsg('');
-    setIsErr(false);
     try {
       const qs = new URLSearchParams({
         resolution: String(resolution),
         ep:         String(ep),
         season:     String(season),
       });
+
+      // 1. Fast probe — checks availability & whether conversion is needed
       const res  = await fetch(
         `https://movieapi.nasotc.com/download-info/${detailPath}?${qs}`,
-        { signal: AbortSignal.timeout(10_000) },
+        { signal: AbortSignal.timeout(12_000) },
       );
       const data = await res.json();
 
       if (!res.ok || !data.available) {
-        setIsErr(true);
+        setState('error');
         setMsg(data.detail || 'Not available — try another quality.');
-        setBusy(null);
+        setBusyQ(null);
         return;
       }
 
       if (data.is_trailer) {
-        setMsg('Full movie download unavailable — downloading trailer instead.');
+        setMsg('Full movie unavailable — downloading trailer instead.');
       }
 
-      // Build actual download URL through our streaming endpoint
+      // 2. Show the right status before the browser's save dialog appears
+      if (data.needs_conversion) {
+        setState('converting');
+        setMsg('Converting HLS → MP4 on server…');
+      } else {
+        setState('downloading');
+        setMsg('');
+      }
+
+      // 3. Trigger download — browser shows its native save dialog
       const dlUrl = `https://movieapi.nasotc.com/download/${detailPath}?${qs}`;
       const a = document.createElement('a');
       a.href = dlUrl;
-      a.download = data.filename || `${title}_${resolution}p.mp4`;
+      a.download = data.filename || `${title || 'movie'}_${resolution}p.mp4`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      setBusy(null);
-      if (!data.is_trailer) setOpen(false);
+
+      setState('done');
+      setMsg(data.needs_conversion
+        ? 'Download started — conversion may take a moment.'
+        : 'Download started!');
+      setBusyQ(null);
+      setTimeout(() => { setState('idle'); setMsg(''); }, 4000);
     } catch {
-      setIsErr(true);
+      setState('error');
       setMsg('Connection error — please try again.');
-      setBusy(null);
+      setBusyQ(null);
     }
   };
+
+  const isErr  = state === 'error';
+  const isBusy = busyQ !== null;
 
   const btnClass = compact
     ? 'px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5'
     : 'flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-medium border border-white/10';
 
+  const QUALITY_LABELS: Record<number, string> = {
+    1080: '1080p · Full HD',
+    720:  '720p  · HD',
+    480:  '480p  · SD',
+  };
+
   return (
     <div className="relative" ref={panelRef}>
       <button
-        onClick={() => { setOpen(v => !v); setMsg(''); setIsErr(false); }}
+        onClick={() => { setOpen(v => !v); setState('idle'); setMsg(''); }}
         className={btnClass}
-        title="Download"
+        title="Download MP4"
       >
         <Download className={compact ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
-        Download
+        {!compact && 'Download'}
       </button>
 
       {open && (
-        <div className="absolute z-50 bottom-full mb-2 right-0 bg-[#1c1c1c] border border-white/10 rounded-xl shadow-2xl p-3 w-52">
-          <p className="text-xs text-white/40 mb-2 px-1 font-medium tracking-wide uppercase">Select quality</p>
-          <div className="flex flex-col gap-1">
+        <div className="absolute z-50 bottom-full mb-2 right-0 bg-[#1c1c1c] border border-white/10 rounded-xl shadow-2xl overflow-hidden w-56">
+          {/* Header */}
+          <div className="px-4 py-3 border-b border-white/[0.07] flex items-center gap-2">
+            <Download className="w-3.5 h-3.5 text-primary" />
+            <span className="text-xs font-bold text-white/80 uppercase tracking-wider">Download MP4</span>
+          </div>
+
+          {/* Quality options */}
+          <div className="p-2 flex flex-col gap-1">
             {([1080, 720, 480] as const).map(q => (
               <button
                 key={q}
                 onClick={() => trigger(q)}
-                disabled={busy !== null}
-                className="flex items-center justify-between px-3 py-2 rounded-lg bg-white/5 hover:bg-white/15 text-white text-sm transition-colors disabled:opacity-50"
+                disabled={isBusy}
+                className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50 ${
+                  busyQ === q
+                    ? 'bg-primary/20 text-primary'
+                    : 'bg-white/5 hover:bg-white/12 text-white'
+                }`}
               >
-                <span className="font-medium">{q}p</span>
-                {busy === q
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin text-white/60" />
-                  : <Download className="w-3.5 h-3.5 text-white/30" />}
+                <div className="text-left">
+                  <span className="font-semibold">{q}p</span>
+                  <span className="text-white/35 text-[10px] ml-2">
+                    {q === 1080 ? 'Full HD' : q === 720 ? 'HD' : 'SD'}
+                  </span>
+                </div>
+                {busyQ === q
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
+                  : <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />}
               </button>
             ))}
           </div>
-          {msg && (
-            <p className={`mt-2 text-xs px-1 leading-snug ${isErr ? 'text-red-400' : 'text-yellow-400'}`}>
-              {msg}
-            </p>
+
+          {/* Status message */}
+          {(msg || state === 'converting') && (
+            <div className={`mx-2 mb-2 px-3 py-2 rounded-lg text-[11px] leading-snug flex items-start gap-1.5 ${
+              isErr
+                ? 'bg-red-500/10 text-red-400'
+                : state === 'done'
+                  ? 'bg-green-500/10 text-green-400'
+                  : 'bg-primary/10 text-primary/80'
+            }`}>
+              {state === 'converting' && <Loader2 className="w-3 h-3 animate-spin shrink-0 mt-0.5" />}
+              {state === 'done'       && <Check   className="w-3 h-3 shrink-0 mt-0.5" />}
+              <span>{msg || 'Converting HLS → MP4…'}</span>
+            </div>
           )}
+
+          {/* Note */}
+          <p className="px-4 pb-3 text-[10px] text-white/20 leading-snug">
+            Always delivered as .mp4 · HLS sources are remuxed server-side
+          </p>
         </div>
       )}
     </div>
