@@ -852,8 +852,6 @@ export default function MovieDetail() {
               <DownloadPanel
                 detailPath={detailPath}
                 isSeries={streamData.is_series}
-                season={season}
-                ep={ep}
                 title={streamData.title}
               />
             </div>
