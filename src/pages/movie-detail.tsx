@@ -45,12 +45,128 @@ function useNetworkStatus() {
   return { isOnline, justReconnected };
 }
 
-/* Build a download URL through our own API */
-function getDownloadUrl(detailPath: string, isSeries: boolean, season = 1, ep = 1): string {
-  const base = 'https://movieapi.nasotc.com/download';
-  return isSeries
-    ? `${base}/${detailPath}?ep=${ep}&season=${season}&resolution=1080`
-    : `${base}/${detailPath}?resolution=1080`;
+/* ─── Download panel ─────────────────────────────────────────────────────
+   Shows a quality-selector dropdown. Checks /download-info first (fast),
+   then triggers a browser download — no new tab, no about:blank.
+──────────────────────────────────────────────────────────────────────── */
+function DownloadPanel({
+  detailPath,
+  isSeries,
+  season = 0,
+  ep = 1,
+  title = '',
+  compact = false,
+}: {
+  detailPath: string;
+  isSeries: boolean;
+  season?: number;
+  ep?: number;
+  title?: string;
+  compact?: boolean;
+}) {
+  const [open, setOpen]       = useState(false);
+  const [busy, setBusy]       = useState<number | null>(null);
+  const [msg, setMsg]         = useState('');
+  const [isErr, setIsErr]     = useState(false);
+  const panelRef              = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node))
+        setOpen(false);
+    };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
+
+  const trigger = async (resolution: number) => {
+    setBusy(resolution);
+    setMsg('');
+    setIsErr(false);
+    try {
+      const qs = new URLSearchParams({
+        resolution: String(resolution),
+        ep:         String(ep),
+        season:     String(season),
+      });
+      const res  = await fetch(
+        `https://movieapi.nasotc.com/download-info/${detailPath}?${qs}`,
+        { signal: AbortSignal.timeout(10_000) },
+      );
+      const data = await res.json();
+
+      if (!res.ok || !data.available) {
+        setIsErr(true);
+        setMsg(data.detail || 'Not available — try another quality.');
+        setBusy(null);
+        return;
+      }
+
+      if (data.is_trailer) {
+        setMsg('Full movie download unavailable — downloading trailer instead.');
+      }
+
+      // Build actual download URL through our streaming endpoint
+      const dlUrl = `https://movieapi.nasotc.com/download/${detailPath}?${qs}`;
+      const a = document.createElement('a');
+      a.href = dlUrl;
+      a.download = data.filename || `${title}_${resolution}p.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setBusy(null);
+      if (!data.is_trailer) setOpen(false);
+    } catch {
+      setIsErr(true);
+      setMsg('Connection error — please try again.');
+      setBusy(null);
+    }
+  };
+
+  const btnClass = compact
+    ? 'px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5'
+    : 'flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-medium border border-white/10';
+
+  return (
+    <div className="relative" ref={panelRef}>
+      <button
+        onClick={() => { setOpen(v => !v); setMsg(''); setIsErr(false); }}
+        className={btnClass}
+        title="Download"
+      >
+        <Download className={compact ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
+        Download
+      </button>
+
+      {open && (
+        <div className="absolute z-50 bottom-full mb-2 right-0 bg-[#1c1c1c] border border-white/10 rounded-xl shadow-2xl p-3 w-52">
+          <p className="text-xs text-white/40 mb-2 px-1 font-medium tracking-wide uppercase">Select quality</p>
+          <div className="flex flex-col gap-1">
+            {([1080, 720, 480] as const).map(q => (
+              <button
+                key={q}
+                onClick={() => trigger(q)}
+                disabled={busy !== null}
+                className="flex items-center justify-between px-3 py-2 rounded-lg bg-white/5 hover:bg-white/15 text-white text-sm transition-colors disabled:opacity-50"
+              >
+                <span className="font-medium">{q}p</span>
+                {busy === q
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin text-white/60" />
+                  : <Download className="w-3.5 h-3.5 text-white/30" />}
+              </button>
+            ))}
+          </div>
+          {msg && (
+            <p className={`mt-2 text-xs px-1 leading-snug ${isErr ? 'text-red-400' : 'text-yellow-400'}`}>
+              {msg}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function useCopyLink(text: string) {
@@ -417,15 +533,14 @@ function WatchModal({
             {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Share2 className="w-3.5 h-3.5" />}
             {copied ? 'Copied!' : 'Share'}
           </button>
-          <a
-            href={getDownloadUrl(detailPath, streamData.is_series, season, ep)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5"
-            title="Download this title"
-          >
-            <Download className="w-3.5 h-3.5" /> Download
-          </a>
+          <DownloadPanel
+            detailPath={detailPath}
+            isSeries={streamData.is_series}
+            season={season}
+            ep={ep}
+            title={streamData.title}
+            compact
+          />
           <button onClick={onClose} className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors">
             <X className="w-5 h-5" />
           </button>
@@ -734,15 +849,13 @@ export default function MovieDetail() {
               </button>
 
               {/* Download */}
-              <a
-                href={getDownloadUrl(detailPath, streamData.is_series)}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Download"
-                className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-medium border border-white/10"
-              >
-                <Download className="w-4 h-4" /> Download
-              </a>
+              <DownloadPanel
+                detailPath={detailPath}
+                isSeries={streamData.is_series}
+                season={season}
+                ep={ep}
+                title={streamData.title}
+              />
             </div>
           </div>
         </div>
