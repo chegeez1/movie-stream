@@ -119,7 +119,7 @@ export default function Browse() {
 
   return (
     <Layout>
-      <div className="pt-24 pb-20 px-4 md:px-12">
+      <div className="pt-6 pb-24 px-4 md:pt-24 md:pb-20 md:px-12">
 
         {/* Header */}
         <div className="mb-5 flex items-end justify-between gap-4">
