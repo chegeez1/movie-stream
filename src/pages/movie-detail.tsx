@@ -621,6 +621,7 @@ function WatchModal({
             referrerPolicy="no-referrer"
             title="Movie Player"
             data-testid="iframe-player"
+            sandbox="allow-scripts allow-same-origin allow-fullscreen allow-presentation"
             onLoad={() => setLoaded(true)}
           />
         )}
