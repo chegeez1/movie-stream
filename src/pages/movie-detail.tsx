@@ -474,9 +474,10 @@ function WatchModal({
   }, [onClose]);
 
   /* ── Parent-page ad blocker ─────────────────────────────────────────────
-   * Iframe content (even cross-origin) can still navigate the parent via
-   * window.top.location. Block this at the parent-page level while the
-   * player is open, since our iframe-level injection can't reach here.
+   * Kills all ad pop-ups at the parent level while the player is open.
+   * Covers: window.open, click, mousedown (fires before click — the main
+   * "on-first-click popunder" vector), pointerdown, auxclick (middle-click
+   * → new tab), and touchstart.
    */
   useEffect(() => {
     const AD_HOSTS = [
@@ -484,31 +485,48 @@ function WatchModal({
       'propellerads','hilltopads','exoclick','trafficjunky','juicyads',
       'plugrush','v2006','adex','afu.php','mgid','revcontent',
       'outbrain','taboola','bidvertiser','zedo',
+      'phiglerdail','phigler','clickadu','monetag','richpush',
+      'pushground','evadav','adoperator','trafficker','trafficshop',
     ];
     const isAd = (u: string) => AD_HOSTS.some(d => u.includes(d));
 
-    // Kill window.open in parent context
+    // Kill ALL window.open — player has no reason to open new tabs
     const origOpen = window.open;
     (window as Window).open = () => null;
 
-    // Block clicks on any dynamically injected ad anchors
-    const onDocClick = (e: MouseEvent) => {
-      const t = e.target as HTMLElement | null;
-      let el: HTMLElement | null = t;
-      for (let i = 0; i < 8 && el; i++, el = el.parentElement) {
-        const href = (el as HTMLAnchorElement).href ?? el.getAttribute('href') ?? '';
-        if (href && isAd(href)) {
-          e.stopImmediatePropagation();
-          e.preventDefault();
-          return;
+    // Walk up the DOM looking for ad-href ancestors
+    const findAdHref = (el: HTMLElement | null): string | null => {
+      for (let i = 0; i < 8 && el; i++, el = el.parentElement as HTMLElement | null) {
+        const href = (el as HTMLAnchorElement).href ?? el.getAttribute?.('href') ?? '';
+        if (href && isAd(href)) return href;
+        // Also block _blank anchors to unknown external domains
+        if (el.tagName === 'A') {
+          const tgt = (el as HTMLAnchorElement).target;
+          if (tgt && tgt !== '_self' && tgt !== '') return href || 'blank';
         }
       }
+      return null;
     };
-    document.addEventListener('click', onDocClick, true);
+
+    const blockEv = (e: MouseEvent | TouchEvent) => {
+      if (findAdHref(e.target as HTMLElement)) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener('click',       blockEv as EventListener, true);
+    document.addEventListener('mousedown',   blockEv as EventListener, true);
+    document.addEventListener('pointerdown', blockEv as EventListener, true);
+    document.addEventListener('auxclick',    blockEv as EventListener, true);
+    document.addEventListener('touchstart',  blockEv as EventListener, { capture: true, passive: false });
 
     return () => {
       (window as Window).open = origOpen;
-      document.removeEventListener('click', onDocClick, true);
+      (['click','mousedown','pointerdown','auxclick'] as const).forEach(ev =>
+        document.removeEventListener(ev, blockEv as EventListener, true),
+      );
+      document.removeEventListener('touchstart', blockEv as EventListener, true);
     };
   }, []);
 
