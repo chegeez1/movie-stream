@@ -59,6 +59,7 @@ function DownloadPanel({
   ep = 1,
   title = '',
   compact = false,
+  embedUrl = '',
 }: {
   detailPath: string;
   isSeries: boolean;
@@ -66,12 +67,17 @@ function DownloadPanel({
   ep?: number;
   title?: string;
   compact?: boolean;
+  embedUrl?: string;
 }) {
   const [open, setOpen]       = useState(false);
   const [busyQ, setBusyQ]     = useState<number | null>(null);
   const [state, setState]     = useState<DlState>('idle');
   const [msg, setMsg]         = useState('');
+  const [priming, setPriming] = useState(false);
+  const [primed, setPrimed]   = useState(false);
   const panelRef              = useRef<HTMLDivElement>(null);
+  const iframeRef             = useRef<HTMLIFrameElement>(null);
+  const primeTimer            = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Close on outside click
   useEffect(() => {
@@ -83,6 +89,29 @@ function DownloadPanel({
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, [open]);
+
+  // When panel opens for a series, silently load proxy player to capture HLS URL
+  useEffect(() => {
+    if (!open || !isSeries || !embedUrl || primed) return;
+    setPriming(true);
+    // Build proxy URL with correct ep/season
+    let url = embedUrl;
+    try {
+      const u = new URL(url.startsWith('http') ? url : `${window.location.origin}${url}`);
+      u.searchParams.set('ep', String(ep));
+      u.searchParams.set('resolution', '1080');
+      if (season) u.searchParams.set('se', String(season));
+      else u.searchParams.delete('se');
+      url = u.toString();
+    } catch { /* use original */ }
+    if (iframeRef.current) iframeRef.current.src = url;
+    // Give player 5 s to load and report its HLS URL
+    primeTimer.current = setTimeout(() => {
+      setPriming(false);
+      setPrimed(true);
+    }, 5000);
+    return () => { if (primeTimer.current) clearTimeout(primeTimer.current); };
+  }, [open, isSeries, embedUrl, ep, season, primed]);
 
   const trigger = async (resolution: number) => {
     setBusyQ(resolution);
@@ -109,15 +138,7 @@ function DownloadPanel({
         return;
       }
 
-      // For series: if no stream captured yet, guide user to watch first
-      if (data.watch_first) {
-        setState('error');
-        setMsg('Watch this episode via Server 2 first, then try downloading.');
-        setBusyQ(null);
-        return;
-      }
-
-      if (data.is_trailer) {
+      if (data.is_trailer && !isSeries) {
         setMsg('Full movie unavailable — downloading trailer instead.');
       }
 
@@ -167,8 +188,19 @@ function DownloadPanel({
 
   return (
     <div className="relative" ref={panelRef}>
+      {/* Hidden iframe — silently loads proxy player to capture HLS URL for series */}
+      {isSeries && embedUrl && (
+        <iframe
+          ref={iframeRef}
+          className="absolute w-0 h-0 opacity-0 pointer-events-none"
+          allow="autoplay"
+          title="dl-prime"
+          sandbox="allow-scripts allow-same-origin allow-forms"
+        />
+      )}
+
       <button
-        onClick={() => { setOpen(v => !v); setState('idle'); setMsg(''); }}
+        onClick={() => { setOpen(v => !v); setState('idle'); setMsg(''); setPrimed(false); }}
         className={btnClass}
         title="Download MP4"
       >
@@ -182,9 +214,19 @@ function DownloadPanel({
           <div className="px-4 py-3 border-b border-white/[0.07] flex items-center gap-2">
             <Download className="w-3.5 h-3.5 text-primary" />
             <span className="text-xs font-bold text-white/80 uppercase tracking-wider">Download MP4</span>
+            {priming && <Loader2 className="w-3 h-3 animate-spin text-white/40 ml-auto" />}
           </div>
 
+          {/* Priming state — loading proxy player to capture stream URL */}
+          {priming && (
+            <div className="px-4 py-3 text-[11px] text-white/40 flex items-center gap-2">
+              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+              Fetching stream source…
+            </div>
+          )}
+
           {/* Quality options */}
+          {!priming && (
           <div className="p-2 flex flex-col gap-1">
             {([1080, 720, 480] as const).map(q => (
               <button
@@ -209,6 +251,7 @@ function DownloadPanel({
               </button>
             ))}
           </div>
+          )}
 
           {/* Status message */}
           {(msg || state === 'converting') && (
@@ -690,6 +733,7 @@ function WatchModal({
             season={season}
             ep={ep}
             title={streamData.title}
+            embedUrl={streamData.player?.embed_url ?? ''}
             compact
           />
           <button onClick={onClose} className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors">
@@ -1011,6 +1055,7 @@ export default function MovieDetail() {
                 season={dlSeason}
                 ep={dlEp}
                 title={streamData.title}
+                embedUrl={streamData.player?.embed_url ?? ''}
               />
             </div>
           </div>
