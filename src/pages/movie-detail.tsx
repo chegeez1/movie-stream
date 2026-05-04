@@ -629,15 +629,15 @@ function WatchModal({
    */
   const wasOnlineRef = useRef(isOnline);
   useEffect(() => {
+    let stuckTimer: ReturnType<typeof setTimeout> | undefined;
     if (!wasOnlineRef.current && isOnline) {
       setStuck(false);
-      const stuckTimer = setTimeout(() => setStuck(true), 8000);
-      return () => clearTimeout(stuckTimer);
-    }
-    if (wasOnlineRef.current && !isOnline) {
-      setStuck(false);          /* clear stuck state when going offline */
+      stuckTimer = setTimeout(() => setStuck(true), 8000);
+    } else if (wasOnlineRef.current && !isOnline) {
+      setStuck(false);
     }
     wasOnlineRef.current = isOnline;
+    return () => clearTimeout(stuckTimer);
   }, [isOnline]);
 
   /* Clear stuck flag as soon as the iframe signals it loaded successfully */
@@ -1043,7 +1043,7 @@ export default function MovieDetail() {
     });
     // Track which episode is being watched so download uses correct ep/season
     setDlEp(epNum);
-    setDlSeason(seasonNum || (streamData.seasons?.[0]?.season ?? 0));
+    setDlSeason(Number(seasonNum || streamData.seasons?.[0]?.season || 0));
     setWatchConfig({ streamData, detailPath, ep: epNum, season: seasonNum, preRanked });
   };
 
@@ -1284,13 +1284,13 @@ export default function MovieDetail() {
       <div className="px-6 md:px-14 pb-24 -mt-4 relative z-10">
 
         {/* ── Episodes ── */}
-        {streamData.is_series && streamData.seasons?.length > 0 && (
+        {streamData.is_series && (streamData.seasons?.length ?? 0) > 0 && (
           <div className="mb-14">
             <h2 className="text-xl font-bold mb-5 text-white">Episodes</h2>
-            <Tabs defaultValue={streamData.seasons[0].season.toString()}>
+            <Tabs defaultValue={streamData.seasons![0].season.toString()}>
               <ScrollArea className="w-full mb-5">
                 <TabsList className="bg-transparent border-b border-white/10 rounded-none h-auto p-0 w-max space-x-6">
-                  {streamData.seasons.map((season: { season: number; episode_count: number }) => (
+                  {streamData.seasons!.map((season: { season: number; episode_count: number }) => (
                     <TabsTrigger
                       key={season.season}
                       value={season.season.toString()}
@@ -1302,7 +1302,7 @@ export default function MovieDetail() {
                 </TabsList>
               </ScrollArea>
 
-              {streamData.seasons.map((season: { season: number; episode_count: number }) => (
+              {streamData.seasons!.map((season: { season: number; episode_count: number }) => (
                 <TabsContent key={season.season} value={season.season.toString()} className="mt-0">
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 gap-2.5">
                     {Array.from({ length: season.episode_count }).map((_, i) => {
