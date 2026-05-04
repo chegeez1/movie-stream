@@ -46,12 +46,15 @@ function useNetworkStatus() {
 }
 
 /* ─── Download panel ─────────────────────────────────────────────────────
-   Fetches /download-info on open. If the API returns a `sources` array
-   (direct MP4 links from GiftedTech/BWM CDN), renders those buttons
-   immediately — no conversion, no waiting. Falls back to the HLS →
-   server-remux flow for titles not covered by BWM.
+   1. On open: silently pre-fetches download-info.
+      - If BWM sources returned → show quality buttons with instant direct links.
+      - Otherwise → show fallback 1080/720/480 buttons (never show pre-fetch errors).
+   2. On quality click (fallback path):
+      - If server already has a cached HLS URL → starts download immediately.
+      - If watch_first: silently loads the proxy player in a hidden iframe for
+        8 s to capture the HLS URL, then auto-retries → starts download.
 ──────────────────────────────────────────────────────────────────────── */
-type DlState = 'idle' | 'checking' | 'converting' | 'downloading' | 'done' | 'error';
+type DlState = 'idle' | 'priming' | 'checking' | 'converting' | 'downloading' | 'done' | 'error';
 type BwmSource = { quality: string; url: string; filename: string };
 
 function DownloadPanel({
@@ -61,7 +64,7 @@ function DownloadPanel({
   ep = 1,
   title = '',
   compact = false,
-  embedUrl: _embedUrl = '',
+  embedUrl = '',
 }: {
   detailPath: string;
   isSeries: boolean;
@@ -71,15 +74,15 @@ function DownloadPanel({
   compact?: boolean;
   embedUrl?: string;
 }) {
-  const [open, setOpen]           = useState(false);
-  const [loading, setLoading]     = useState(false);
-  const [sources, setSources]     = useState<BwmSource[] | null>(null);
-  const [busyQ, setBusyQ]         = useState<string | null>(null);
-  const [state, setState]         = useState<DlState>('idle');
-  const [msg, setMsg]             = useState('');
-  const panelRef                  = useRef<HTMLDivElement>(null);
-  // track the ep/season for which sources were loaded so we refetch on change
-  const loadedFor                 = useRef('');
+  const [open, setOpen]       = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [sources, setSources] = useState<BwmSource[] | null>(null);
+  const [busyQ, setBusyQ]     = useState<number | null>(null);
+  const [state, setState]     = useState<DlState>('idle');
+  const [msg, setMsg]         = useState('');
+  const panelRef              = useRef<HTMLDivElement>(null);
+  const iframeRef             = useRef<HTMLIFrameElement>(null);
+  const loadedFor             = useRef('');
 
   // Close on outside click
   useEffect(() => {
@@ -92,11 +95,11 @@ function DownloadPanel({
     return () => document.removeEventListener('mousedown', h);
   }, [open]);
 
-  // When panel opens, fetch download-info (gets BWM direct links if available)
+  // Pre-fetch on open to check for BWM direct sources
   useEffect(() => {
     if (!open) return;
     const key = `${detailPath}:${ep}:${season}`;
-    if (loadedFor.current === key) return;          // already loaded for this ep
+    if (loadedFor.current === key) return;
     loadedFor.current = key;
     setSources(null);
     setState('idle');
@@ -109,25 +112,18 @@ function DownloadPanel({
       .then(data => {
         if (data.available && Array.isArray(data.sources) && data.sources.length) {
           setSources(data.sources);
-        } else if (data.available && data.watch_first) {
-          setState('error');
-          setMsg('Watch this episode first, then try downloading.');
-        } else if (!data.available) {
-          setState('error');
-          setMsg(data.detail || 'Not available.');
         }
-        // else: no sources array → fallback quality buttons will call trigger()
+        // Any other result (watch_first, unavailable, HLS fallback) → just show
+        // the regular quality buttons silently; errors only surface on click.
       })
-      .catch(() => { /* ignore — fallback triggers on click */ })
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, [open, detailPath, ep, season]);
 
-  // Reset loaded key when ep/season changes so next open re-fetches
   useEffect(() => { loadedFor.current = ''; }, [ep, season]);
 
-  // Direct download for BWM sources (no server needed)
+  // Direct download for BWM sources (instant, no server)
   const downloadDirect = (src: BwmSource) => {
-    setBusyQ(src.quality);
     const a = document.createElement('a');
     a.href = src.url;
     a.download = src.filename;
@@ -140,43 +136,90 @@ function DownloadPanel({
     setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 3000);
   };
 
-  // Fallback: server-side HLS remux (for titles not in BWM)
+  // Prime proxy player in hidden iframe so it reports its HLS URL to /report-video
+  const primePlayer = (resolution: number) => {
+    if (!embedUrl || !iframeRef.current) return;
+    let url = embedUrl;
+    try {
+      const u = new URL(url.startsWith('http') ? url : `${window.location.origin}${url}`);
+      u.searchParams.set('ep', String(ep));
+      u.searchParams.set('resolution', String(resolution));
+      if (season) u.searchParams.set('se', String(season));
+      else u.searchParams.delete('se');
+      url = u.toString();
+    } catch { /* use original */ }
+    iframeRef.current.src = url;
+  };
+
+  // Fallback: probe server, prime if needed, retry, then download
   const trigger = async (resolution: number) => {
-    setBusyQ(String(resolution));
+    setBusyQ(resolution);
     setState('checking');
     setMsg('');
+
+    const qs = new URLSearchParams({ resolution: String(resolution), ep: String(ep), season: String(season) });
+    const infoUrl = `https://movieapi.jchege.tech/download-info/${detailPath}?${qs}`;
+    const dlUrl   = `https://movieapi.jchege.tech/download/${detailPath}?${qs}`;
+
+    const attemptDownload = async (): Promise<boolean> => {
+      try {
+        const res  = await fetch(infoUrl, { signal: AbortSignal.timeout(12_000) });
+        const data = await res.json();
+        if (!res.ok || !data.available) return false;
+        if (data.watch_first) return false; // still not ready
+        if (data.needs_conversion) {
+          setState('converting');
+          setMsg('Converting HLS → MP4…');
+        } else {
+          setState('downloading');
+          setMsg('');
+        }
+        if (data.is_trailer && !isSeries) setMsg('Full movie unavailable — trailer instead.');
+        const a = document.createElement('a');
+        a.href = dlUrl;
+        a.download = data.filename || `${title || 'movie'}_${resolution}p.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return true;
+      } catch { return false; }
+    };
+
     try {
-      const qs = new URLSearchParams({ resolution: String(resolution), ep: String(ep), season: String(season) });
-      const res  = await fetch(
-        `https://movieapi.jchege.tech/download-info/${detailPath}?${qs}`,
-        { signal: AbortSignal.timeout(12_000) },
-      );
-      const data = await res.json();
-      if (!res.ok || !data.available) {
-        setState('error');
-        setMsg(data.detail || 'Not available — try another quality.');
+      // First attempt — works instantly if server already has the URL cached
+      const ok = await attemptDownload();
+      if (ok) {
+        setState('done');
+        setMsg(state === 'converting' ? 'Download started — may take a moment.' : 'Download started!');
         setBusyQ(null);
+        setTimeout(() => { setState('idle'); setMsg(''); }, 4000);
         return;
       }
-      if (data.is_trailer && !isSeries) setMsg('Full movie unavailable — downloading trailer instead.');
-      if (data.needs_conversion) {
-        setState('converting');
-        setMsg('Converting HLS → MP4 on server…');
-      } else {
-        setState('downloading');
-        setMsg('');
+
+      // Server doesn't have the URL yet — prime the proxy player silently
+      setState('priming');
+      setMsg('Loading stream…');
+      primePlayer(resolution);
+
+      // Poll every 2 s for up to 10 s
+      let found = false;
+      for (let i = 0; i < 5; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        setMsg(`Loading stream… ${(i + 1) * 2}s`);
+        const ok2 = await attemptDownload();
+        if (ok2) { found = true; break; }
       }
-      const dlUrl = `https://movieapi.jchege.tech/download/${detailPath}?${qs}`;
-      const a = document.createElement('a');
-      a.href = dlUrl;
-      a.download = data.filename || `${title || 'movie'}_${resolution}p.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setState('done');
-      setMsg(data.needs_conversion ? 'Download started — conversion may take a moment.' : 'Download started!');
-      setBusyQ(null);
-      setTimeout(() => { setState('idle'); setMsg(''); }, 4000);
+
+      if (found) {
+        setState('done');
+        setMsg('Download started!');
+        setBusyQ(null);
+        setTimeout(() => { setState('idle'); setMsg(''); }, 4000);
+      } else {
+        setState('error');
+        setMsg('Could not fetch stream. Try playing the episode first.');
+        setBusyQ(null);
+      }
     } catch {
       setState('error');
       setMsg('Connection error — please try again.');
@@ -185,6 +228,7 @@ function DownloadPanel({
   };
 
   const isErr  = state === 'error';
+  const isBusy = busyQ !== null;
 
   const btnClass = compact
     ? 'px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5'
@@ -200,6 +244,15 @@ function DownloadPanel({
 
   return (
     <div className="relative" ref={panelRef}>
+      {/* Hidden iframe for priming the proxy player */}
+      <iframe
+        ref={iframeRef}
+        className="absolute w-0 h-0 opacity-0 pointer-events-none"
+        allow="autoplay"
+        title="dl-prime"
+        sandbox="allow-scripts allow-same-origin allow-forms"
+      />
+
       <button
         onClick={() => { setOpen(v => !v); setState('idle'); setMsg(''); }}
         className={btnClass}
@@ -218,50 +271,45 @@ function DownloadPanel({
             {loading && <Loader2 className="w-3 h-3 animate-spin text-white/40 ml-auto" />}
           </div>
 
-          {/* Loading state */}
+          {/* Loading skeleton while pre-fetching */}
           {loading && (
             <div className="px-4 py-3 text-[11px] text-white/40 flex items-center gap-2">
               <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-              Finding best source…
+              Finding sources…
             </div>
           )}
 
-          {/* BWM direct sources (multiple qualities, instant download) */}
+          {/* BWM direct sources — instant download */}
           {!loading && sources && sources.length > 0 && (
             <div className="p-2 flex flex-col gap-1">
               {sources.map(src => (
                 <button
                   key={src.quality}
                   onClick={() => downloadDirect(src)}
-                  disabled={busyQ !== null}
-                  className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50 ${
-                    busyQ === src.quality
-                      ? 'bg-primary/20 text-primary'
-                      : 'bg-white/5 hover:bg-white/12 text-white'
-                  }`}
+                  disabled={isBusy}
+                  className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50
+                    bg-white/5 hover:bg-white/12 text-white`}
                 >
                   <div className="text-left">
                     <span className="font-semibold">{src.quality}</span>
                     <span className="text-white/35 text-[10px] ml-2">{qualityLabel(src.quality)}</span>
                   </div>
-                  {busyQ === src.quality
-                    ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
-                    : <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />}
+                  <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />
                 </button>
               ))}
             </div>
           )}
 
-          {/* Fallback quality buttons (HLS → server remux) */}
-          {!loading && !sources && state !== 'error' && (
+          {/* Fallback quality buttons (works for all titles — primes if needed) */}
+          {!loading && !sources && (
             <div className="p-2 flex flex-col gap-1">
               {([1080, 720, 480] as const).map(q => (
                 <button
                   key={q}
                   onClick={() => trigger(q)}
-                  disabled={busyQ !== null}
+                  disabled={isBusy}
                   className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50 ${
-                    busyQ === String(q)
+                    busyQ === q
                       ? 'bg-primary/20 text-primary'
                       : 'bg-white/5 hover:bg-white/12 text-white'
                   }`}
@@ -272,7 +320,7 @@ function DownloadPanel({
                       {q === 1080 ? 'Full HD' : q === 720 ? 'HD' : 'SD'}
                     </span>
                   </div>
-                  {busyQ === String(q)
+                  {busyQ === q
                     ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
                     : <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />}
                 </button>
@@ -289,23 +337,16 @@ function DownloadPanel({
                   ? 'bg-green-500/10 text-green-400'
                   : 'bg-primary/10 text-primary/80'
             }`}>
-              {state === 'converting' && <Loader2 className="w-3 h-3 animate-spin shrink-0 mt-0.5" />}
-              {state === 'done'       && <Check   className="w-3 h-3 shrink-0 mt-0.5" />}
+              {(state === 'converting' || state === 'priming' || state === 'checking') &&
+                <Loader2 className="w-3 h-3 animate-spin shrink-0 mt-0.5" />}
+              {state === 'done' && <Check className="w-3 h-3 shrink-0 mt-0.5" />}
               <span>{msg || 'Converting HLS → MP4…'}</span>
             </div>
           )}
 
-          {/* Note */}
-          {!loading && sources && (
-            <p className="px-4 pb-3 text-[10px] text-white/20 leading-snug">
-              Direct MP4 · No conversion needed
-            </p>
-          )}
-          {!loading && !sources && state !== 'error' && (
-            <p className="px-4 pb-3 text-[10px] text-white/20 leading-snug">
-              Always delivered as .mp4
-            </p>
-          )}
+          <p className="px-4 pb-3 text-[10px] text-white/20 leading-snug">
+            {sources ? 'Direct MP4 · No conversion needed' : 'Always delivered as .mp4'}
+          </p>
         </div>
       )}
     </div>
