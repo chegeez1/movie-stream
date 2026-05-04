@@ -167,14 +167,27 @@ function DownloadPanel({
         const data = await res.json();
         if (!res.ok || !data.available) return false;
         if (data.watch_first) return false; // still not ready
-        if (data.needs_conversion) {
-          setState('converting');
-          setMsg('Converting HLS → MP4…');
-        } else {
-          setState('downloading');
-          setMsg('');
-        }
         if (data.is_trailer && !isSeries) setMsg('Full movie unavailable — trailer instead.');
+
+        // If HLS and we have the raw stream_url, hand it directly to IDM/VLC.
+        // IDM intercepts .m3u8 URLs and downloads all segments in parallel at full speed —
+        // far faster than streaming through our server's ffmpeg conversion.
+        if (data.needs_conversion && data.stream_url) {
+          setState('downloading');
+          setMsg('Opening stream — IDM/VLC will download segments at full speed.');
+          const a = document.createElement('a');
+          a.href = data.stream_url;
+          a.download = (data.filename || `${title || 'movie'}_${resolution}p`).replace(/\.mp4$/, '.m3u8');
+          a.target = '_blank';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          return true;
+        }
+
+        // Direct MP4 (BWM redirect or server proxy)
+        setState('downloading');
+        setMsg('');
         const a = document.createElement('a');
         a.href = dlUrl;
         a.download = data.filename || `${title || 'movie'}_${resolution}p.mp4`;
