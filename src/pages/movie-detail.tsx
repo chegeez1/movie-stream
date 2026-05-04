@@ -97,7 +97,7 @@ function DownloadPanel({
 
       // 1. Fast probe — checks availability & whether conversion is needed
       const res  = await fetch(
-        `https://movieapi.nasotc.com/download-info/${detailPath}?${qs}`,
+        `https://movieapi.jchege.tech/download-info/${detailPath}?${qs}`,
         { signal: AbortSignal.timeout(12_000) },
       );
       const data = await res.json();
@@ -123,7 +123,7 @@ function DownloadPanel({
       }
 
       // 3. Trigger download — browser shows its native save dialog
-      const dlUrl = `https://movieapi.nasotc.com/download/${detailPath}?${qs}`;
+      const dlUrl = `https://movieapi.jchege.tech/download/${detailPath}?${qs}`;
       const a = document.createElement('a');
       a.href = dlUrl;
       a.download = data.filename || `${title || 'movie'}_${resolution}p.mp4`;
