@@ -91,31 +91,48 @@ function DownloadPanel({
   // Reset state when episode changes
   useEffect(() => { setState('idle'); setMsg(''); setBusyQ(null); }, [ep, season]);
 
-  const download = (resolution: number) => {
+  const download = async (resolution: number) => {
     if (busyQ !== null) return;
     setBusyQ(resolution);
     setState('starting');
-    setMsg('Starting download…');
+    setMsg('Checking source…');
 
     const qs = new URLSearchParams({
       resolution: String(resolution),
       ep: String(ep),
       season: String(season),
     });
-    const dlUrl = `https://movieapi.jchege.tech/download/${detailPath}?${qs}`;
+    const infoUrl = `https://movieapi.jchege.tech/download-info/${detailPath}?${qs}`;
+    const dlUrl   = `https://movieapi.jchege.tech/download/${detailPath}?${qs}`;
 
-    // Open the download URL — server responds with Content-Disposition: attachment
-    // so the browser saves it directly to the Downloads folder on all devices.
-    const a = document.createElement('a');
-    a.href = dlUrl;
-    a.download = `${title || 'movie'}_${resolution}p.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    // Open a blank tab NOW (synchronous, inside user-gesture) so popup blockers
+    // don't fire. We'll redirect it to the real download URL after the check,
+    // or close it if no source is found.
+    const win = window.open('', '_blank');
 
-    setState('done');
-    setMsg('Download started — check your Downloads folder.');
-    setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 5000);
+    try {
+      const res  = await fetch(infoUrl, { signal: AbortSignal.timeout(12_000) });
+      const data = await res.json();
+
+      if (res.ok && data.available) {
+        // Server has a source — redirect the blank tab to the download.
+        // Server sends Content-Disposition: attachment so the browser saves the file.
+        if (win) win.location.href = dlUrl;
+        setState('done');
+        setMsg('Download started — check your Downloads folder.');
+        setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 5000);
+      } else {
+        if (win) win.close();
+        setState('error');
+        setMsg('No source yet — watch on Server 2 first, then retry.');
+        setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 6000);
+      }
+    } catch {
+      if (win) win.close();
+      setState('error');
+      setMsg('Connection error — please try again.');
+      setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 4000);
+    }
   };
 
   const isErr  = state === 'error';
