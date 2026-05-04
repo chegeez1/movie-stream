@@ -330,10 +330,18 @@ function DownloadPanel({
 
           {/* No source found after pre-fetch */}
           {!loading && !sources && state === 'idle' && !msg && (
-            <div className="px-4 py-3 text-[11px] text-white/40 leading-snug">
-              No download source available for this title.
-              <br />
-              <span className="text-white/25">Watch it on Server 2 first, then try again.</span>
+            <div className="px-4 py-3 text-[11px] text-white/40 leading-snug space-y-2">
+              <div>
+                No download source yet.
+                <br />
+                <span className="text-white/25">Watch on Server 2 first, then tap Retry.</span>
+              </div>
+              <button
+                onClick={() => { loadedFor.current = ''; setOpen(false); setTimeout(() => setOpen(true), 50); }}
+                className="flex items-center gap-1 text-primary/70 hover:text-primary text-[11px] font-medium transition-colors"
+              >
+                <RefreshCw className="w-3 h-3" /> Retry
+              </button>
             </div>
           )}
 
