@@ -109,6 +109,14 @@ function DownloadPanel({
         return;
       }
 
+      // For series: if no stream captured yet, guide user to watch first
+      if (data.watch_first) {
+        setState('error');
+        setMsg('Watch this episode via Server 2 first, then try downloading.');
+        setBusyQ(null);
+        return;
+      }
+
       if (data.is_trailer) {
         setMsg('Full movie unavailable — downloading trailer instead.');
       }
@@ -795,6 +803,8 @@ export default function MovieDetail() {
 
   const [watchConfig,    setWatchConfig]    = useState<WatchConfig | null>(null);
   const [trailerOpen,    setTrailerOpen]    = useState(false);
+  const [dlEp,           setDlEp]           = useState(1);
+  const [dlSeason,       setDlSeason]       = useState(0);
   const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
   const { copied: pageCopied, copy: copyPageLink } = useCopyLink(pageUrl);
 
@@ -834,6 +844,9 @@ export default function MovieDetail() {
       ep: epNum,
       season: seasonNum || 1,
     });
+    // Track which episode is being watched so download uses correct ep/season
+    setDlEp(epNum);
+    setDlSeason(seasonNum || (streamData.seasons?.[0]?.season ?? 0));
     setWatchConfig({ streamData, detailPath, ep: epNum, season: seasonNum, preRanked });
   };
 
@@ -995,6 +1008,8 @@ export default function MovieDetail() {
               <DownloadPanel
                 detailPath={detailPath}
                 isSeries={streamData.is_series}
+                season={dlSeason}
+                ep={dlEp}
                 title={streamData.title}
               />
             </div>
