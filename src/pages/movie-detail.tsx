@@ -243,6 +243,7 @@ interface PlayerSource {
   label: string;
   url: string;
   hasCoverStrips: boolean;
+  isProxy?: boolean;   /* true = our ad-free proxy player */
   ok?: boolean;        /* undefined = unchecked, true = working, false = failed */
   latency_ms?: number;
 }
@@ -254,7 +255,7 @@ function buildProxySource(streamData: StreamData, ep = 1, season = 0): PlayerSou
   const u = new URL(base.startsWith('http') ? base : `${window.location.origin}${base}`);
   u.searchParams.set('ep', String(ep));
   if (season) u.searchParams.set('se', String(season)); else u.searchParams.delete('se');
-  return { label: 'Server 4', url: u.toString(), hasCoverStrips: true };
+  return { label: 'Server 2', url: u.toString(), hasCoverStrips: true, isProxy: true };
 }
 
 /* Fallback static sources (used while API check is in-flight or if no IMDB ID) */
@@ -270,12 +271,12 @@ function buildStaticSources(streamData: StreamData, ep = 1, season = 0): PlayerS
   if (imdb) {
     if (streamData.is_series) {
       sources.push({ label: 'Server 1', url: `https://vidsrc.to/embed/tv/${imdb}/${se}/${ep}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 2', url: `https://vidsrc.me/embed/tv?imdb=${imdb}&season=${se}&episode=${ep}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 3', url: `https://player.autoembed.cc/embed/tv/${imdb}/${se}/${ep}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 3', url: `https://vidsrc.me/embed/tv?imdb=${imdb}&season=${se}&episode=${ep}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 4', url: `https://player.autoembed.cc/embed/tv/${imdb}/${se}/${ep}`, hasCoverStrips: false });
     } else {
       sources.push({ label: 'Server 1', url: `https://vidsrc.to/embed/movie/${imdb}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 2', url: `https://vidsrc.me/embed/movie?imdb=${imdb}`, hasCoverStrips: false });
-      sources.push({ label: 'Server 3', url: `https://player.autoembed.cc/embed/movie/${imdb}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 3', url: `https://vidsrc.me/embed/movie?imdb=${imdb}`, hasCoverStrips: false });
+      sources.push({ label: 'Server 4', url: `https://player.autoembed.cc/embed/movie/${imdb}`, hasCoverStrips: false });
     }
   }
 
@@ -636,21 +637,24 @@ function WatchModal({
                 key={i}
                 onClick={() => handleManualSwitch(i)}
                 title={
-                  s.ok === false ? `${s.label} — unavailable`
-                  : s.ok === true ? `${s.label} — ${s.latency_ms}ms`
-                  : s.label
+                  s.isProxy ? `${s.label} — Ad-free (our server)`
+                  : s.ok === false ? `${s.label} — unavailable`
+                  : s.ok === true ? `${s.label} — ${s.latency_ms}ms · may contain ads`
+                  : `${s.label} · may contain ads`
                 }
                 className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shrink-0 transition-colors ${
                   i === srcIdx
-                    ? 'bg-primary text-white'
+                    ? s.isProxy ? 'bg-green-600 text-white' : 'bg-primary text-white'
                     : s.ok === false
                       ? 'bg-white/5 text-white/30 hover:bg-white/10 line-through'
                       : 'bg-white/10 text-white/60 hover:bg-white/20 hover:text-white'
                 }`}
               >
-                {s.ok === true  && i !== srcIdx && <Wifi    className="w-2.5 h-2.5 text-green-400" />}
-                {s.ok === false                  && <WifiOff className="w-2.5 h-2.5 text-red-400/60" />}
+                {s.isProxy && <Zap className="w-2.5 h-2.5" />}
+                {!s.isProxy && s.ok === true  && i !== srcIdx && <Wifi    className="w-2.5 h-2.5 text-green-400" />}
+                {!s.isProxy && s.ok === false                  && <WifiOff className="w-2.5 h-2.5 text-red-400/60" />}
                 {s.label}
+                {s.isProxy && <span className="text-[9px] font-normal opacity-80">ad-free</span>}
               </button>
             ))
           )}
