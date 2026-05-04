@@ -55,7 +55,7 @@ function useNetworkStatus() {
         8 s to capture the HLS URL, then auto-retries → starts download.
 ──────────────────────────────────────────────────────────────────────── */
 type DlState = 'idle' | 'priming' | 'checking' | 'converting' | 'downloading' | 'done' | 'error';
-type BwmSource = { quality: string; url: string; filename: string };
+type BwmSource = { quality: string; url: string; filename: string; isHls?: boolean };
 
 function DownloadPanel({
   detailPath,
@@ -95,7 +95,7 @@ function DownloadPanel({
     return () => document.removeEventListener('mousedown', h);
   }, [open]);
 
-  // Pre-fetch on open to check for BWM direct sources
+  // Pre-fetch on open to check for BWM direct sources OR HLS stream URL
   useEffect(() => {
     if (!open) return;
     const key = `${detailPath}:${ep}:${season}`;
@@ -110,11 +110,17 @@ function DownloadPanel({
       { signal: AbortSignal.timeout(12_000) })
       .then(r => r.json())
       .then(data => {
-        if (data.available && Array.isArray(data.sources) && data.sources.length) {
+        if (!data.available) return;
+        // BWM direct multi-quality MP4 sources — instant download
+        if (Array.isArray(data.sources) && data.sources.length) {
           setSources(data.sources);
+          return;
         }
-        // Any other result (watch_first, unavailable, HLS fallback) → just show
-        // the regular quality buttons silently; errors only surface on click.
+        // HLS stream_url — hand straight to IDM; server-side conversion not needed
+        if (data.stream_url && !data.is_trailer) {
+          const safe = (data.filename ?? `${title || 'movie'}_stream`).replace(/\.mp4$/i, '.m3u8');
+          setSources([{ quality: 'Best', url: data.stream_url, filename: safe, isHls: true }]);
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -122,18 +128,24 @@ function DownloadPanel({
 
   useEffect(() => { loadedFor.current = ''; }, [ep, season]);
 
-  // Direct download for BWM sources (instant, no server)
+  // Direct download for BWM MP4 or HLS stream sources
   const downloadDirect = (src: BwmSource) => {
     const a = document.createElement('a');
     a.href = src.url;
-    a.download = src.filename;
     a.target = '_blank';
+    if (src.isHls) {
+      // Open m3u8 in new tab — IDM/VLC intercepts it and downloads all segments at full speed.
+      // Do NOT set a.download — browser must navigate to the URL so IDM can grab it.
+      a.rel = 'noopener';
+    } else {
+      a.download = src.filename;
+    }
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setState('done');
-    setMsg('Download started!');
-    setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 3000);
+    setMsg(src.isHls ? 'Stream opened — IDM will download at full speed.' : 'Download started!');
+    setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 4000);
   };
 
   // Prime proxy player in hidden iframe so it reports its HLS URL to /report-video
@@ -292,7 +304,7 @@ function DownloadPanel({
             </div>
           )}
 
-          {/* BWM direct sources — instant download */}
+          {/* Direct sources — BWM MP4 or HLS stream */}
           {!loading && sources && sources.length > 0 && (
             <div className="p-2 flex flex-col gap-1">
               {sources.map(src => (
@@ -305,7 +317,10 @@ function DownloadPanel({
                 >
                   <div className="text-left">
                     <span className="font-semibold">{src.quality}</span>
-                    <span className="text-white/35 text-[10px] ml-2">{qualityLabel(src.quality)}</span>
+                    {src.isHls
+                      ? <span className="text-blue-400/70 text-[10px] ml-2">HLS stream · IDM</span>
+                      : <span className="text-white/35 text-[10px] ml-2">{qualityLabel(src.quality)}</span>
+                    }
                   </div>
                   <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />
                 </button>
