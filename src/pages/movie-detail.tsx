@@ -8,7 +8,7 @@ import { fetchPlay } from '@/lib/api';
 import { Layout } from '@/components/layout';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Play, X, Loader2, Info, Share2, Check, RefreshCw, Wifi, WifiOff, Zap, Bookmark, BookmarkCheck, Film, Star, Eye, Download } from 'lucide-react';
+import { Play, X, Loader2, Info, Share2, Check, RefreshCw, Wifi, WifiOff, Zap, Bookmark, BookmarkCheck, Film, Star, Eye, Download, Maximize, Minimize } from 'lucide-react';
 import { useRatings } from '@/hooks/use-ratings';
 import { MovieCard, MovieCardSkeleton } from '@/components/movie-card';
 
@@ -552,9 +552,25 @@ function WatchModal({
   const [countdown, setCountdown] = useState(LOAD_TIMEOUT_SECS);
   const [reloadKey, setReloadKey]           = useState(0);
   const [stuckAfterReconnect, setStuck]     = useState(false);
+  const [isFullscreen, setIsFullscreen]     = useState(false);
   const { copied, copy }                    = useCopyLink(shareUrl);
   const iframeRef                           = React.useRef<HTMLIFrameElement>(null);
+  const modalRef                            = React.useRef<HTMLDivElement>(null);
   const manualRef                           = React.useRef(false);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      (modalRef.current ?? document.documentElement).requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
   const current                             = sources[srcIdx];
   const hasMore                             = srcIdx < sources.length - 1;
   const wasPreRanked                        = !!preRanked;
@@ -592,10 +608,13 @@ function WatchModal({
     setReloadKey(k => k + 1);
   };
 
-  /* Keyboard close */
+  /* Keyboard shortcuts: Esc = close, F = toggle fullscreen */
   useEffect(() => {
     document.body.style.overflow = 'hidden';
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !document.fullscreenElement) onClose();
+      if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+    };
     window.addEventListener('keydown', onKey);
     return () => { document.body.style.overflow = 'unset'; window.removeEventListener('keydown', onKey); };
   }, [onClose]);
@@ -721,7 +740,7 @@ function WatchModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black flex flex-col">
+    <div ref={modalRef} className="fixed inset-0 z-[100] bg-black flex flex-col">
       {/* ── Topbar ── */}
       <div className="flex flex-col md:flex-row md:items-center px-4 py-2 bg-black shrink-0 z-20 border-b border-white/10 gap-0 md:gap-3">
 
@@ -743,6 +762,13 @@ function WatchModal({
               title="Reload player"
             >
               <RefreshCw className="w-4 h-4" />
+            </button>
+            <button
+              onClick={toggleFullscreen}
+              className="p-2 bg-white/10 rounded-full text-white/60 hover:text-white transition-colors"
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            >
+              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
             </button>
             <button onClick={onClose} className="p-2 bg-white/10 rounded-full text-white transition-colors">
               <X className="w-5 h-5" />
@@ -811,6 +837,13 @@ function WatchModal({
             embedUrl={streamData.player?.embed_url ?? ''}
             compact
           />
+          <button
+            onClick={toggleFullscreen}
+            className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white/60 hover:text-white transition-colors"
+            title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen (F)'}
+          >
+            {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+          </button>
           <button onClick={onClose} className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors">
             <X className="w-5 h-5" />
           </button>
