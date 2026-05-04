@@ -54,17 +54,14 @@ function useNetworkStatus() {
       - If watch_first: silently loads the proxy player in a hidden iframe for
         8 s to capture the HLS URL, then auto-retries → starts download.
 ──────────────────────────────────────────────────────────────────────── */
-type DlState = 'idle' | 'priming' | 'checking' | 'converting' | 'downloading' | 'done' | 'error';
-type BwmSource = { quality: string; url: string; filename: string; isHls?: boolean };
+type DlState = 'idle' | 'starting' | 'done' | 'error';
 
 function DownloadPanel({
   detailPath,
-  isSeries,
   season = 0,
   ep = 1,
   title = '',
   compact = false,
-  embedUrl = '',
 }: {
   detailPath: string;
   isSeries: boolean;
@@ -74,15 +71,11 @@ function DownloadPanel({
   compact?: boolean;
   embedUrl?: string;
 }) {
-  const [open, setOpen]       = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [sources, setSources] = useState<BwmSource[] | null>(null);
-  const [busyQ, setBusyQ]     = useState<number | null>(null);
-  const [state, setState]     = useState<DlState>('idle');
-  const [msg, setMsg]         = useState('');
-  const panelRef              = useRef<HTMLDivElement>(null);
-  const iframeRef             = useRef<HTMLIFrameElement>(null);
-  const loadedFor             = useRef('');
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<DlState>('idle');
+  const [msg, setMsg]     = useState('');
+  const [busyQ, setBusyQ] = useState<number | null>(null);
+  const panelRef          = useRef<HTMLDivElement>(null);
 
   // Close on outside click
   useEffect(() => {
@@ -95,161 +88,34 @@ function DownloadPanel({
     return () => document.removeEventListener('mousedown', h);
   }, [open]);
 
-  // Pre-fetch on open to check for BWM direct sources OR HLS stream URL
-  useEffect(() => {
-    if (!open) return;
-    const key = `${detailPath}:${ep}:${season}`;
-    if (loadedFor.current === key) return;
-    loadedFor.current = key;
-    setSources(null);
-    setState('idle');
-    setMsg('');
-    setLoading(true);
-    const qs = new URLSearchParams({ resolution: '1080', ep: String(ep), season: String(season) });
-    fetch(`https://movieapi.jchege.tech/download-info/${detailPath}?${qs}`,
-      { signal: AbortSignal.timeout(12_000) })
-      .then(r => r.json())
-      .then(data => {
-        if (!data.available) return;
-        // BWM direct multi-quality MP4 sources — instant download
-        if (Array.isArray(data.sources) && data.sources.length) {
-          setSources(data.sources);
-          return;
-        }
-        // HLS stream_url — hand straight to IDM; server-side conversion not needed
-        if (data.stream_url && !data.is_trailer) {
-          const safe = (data.filename ?? `${title || 'movie'}_stream`).replace(/\.mp4$/i, '.m3u8');
-          setSources([{ quality: 'Best', url: data.stream_url, filename: safe, isHls: true }]);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [open, detailPath, ep, season]);
+  // Reset state when episode changes
+  useEffect(() => { setState('idle'); setMsg(''); setBusyQ(null); }, [ep, season]);
 
-  useEffect(() => { loadedFor.current = ''; }, [ep, season]);
+  const download = (resolution: number) => {
+    if (busyQ !== null) return;
+    setBusyQ(resolution);
+    setState('starting');
+    setMsg('Starting download…');
 
-  // Direct download for BWM MP4 or HLS stream sources
-  const downloadDirect = (src: BwmSource) => {
+    const qs = new URLSearchParams({
+      resolution: String(resolution),
+      ep: String(ep),
+      season: String(season),
+    });
+    const dlUrl = `https://movieapi.jchege.tech/download/${detailPath}?${qs}`;
+
+    // Open the download URL — server responds with Content-Disposition: attachment
+    // so the browser saves it directly to the Downloads folder on all devices.
     const a = document.createElement('a');
-    a.href = src.url;
-    a.target = '_blank';
-    if (src.isHls) {
-      // Open m3u8 in new tab — IDM/VLC intercepts it and downloads all segments at full speed.
-      // Do NOT set a.download — browser must navigate to the URL so IDM can grab it.
-      a.rel = 'noopener';
-    } else {
-      a.download = src.filename;
-    }
+    a.href = dlUrl;
+    a.download = `${title || 'movie'}_${resolution}p.mp4`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+
     setState('done');
-    setMsg(src.isHls ? 'Stream opened — IDM will download at full speed.' : 'Download started!');
-    setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 4000);
-  };
-
-  // Prime proxy player in hidden iframe so it reports its HLS URL to /report-video
-  const primePlayer = (resolution: number) => {
-    if (!embedUrl || !iframeRef.current) return;
-    let url = embedUrl;
-    try {
-      const u = new URL(url.startsWith('http') ? url : `${window.location.origin}${url}`);
-      u.searchParams.set('ep', String(ep));
-      u.searchParams.set('resolution', String(resolution));
-      if (season) u.searchParams.set('se', String(season));
-      else u.searchParams.delete('se');
-      url = u.toString();
-    } catch { /* use original */ }
-    iframeRef.current.src = url;
-  };
-
-  // Fallback: probe server, prime if needed, retry, then download
-  const trigger = async (resolution: number) => {
-    setBusyQ(resolution);
-    setState('checking');
-    setMsg('');
-
-    const qs = new URLSearchParams({ resolution: String(resolution), ep: String(ep), season: String(season) });
-    const infoUrl = `https://movieapi.jchege.tech/download-info/${detailPath}?${qs}`;
-    const dlUrl   = `https://movieapi.jchege.tech/download/${detailPath}?${qs}`;
-
-    const attemptDownload = async (): Promise<boolean> => {
-      try {
-        const res  = await fetch(infoUrl, { signal: AbortSignal.timeout(12_000) });
-        const data = await res.json();
-        if (!res.ok || !data.available) return false;
-        if (data.watch_first) return false; // still not ready
-        if (data.is_trailer && !isSeries) setMsg('Full movie unavailable — trailer instead.');
-
-        // If HLS and we have the raw stream_url, hand it directly to IDM/VLC.
-        // IDM intercepts .m3u8 URLs and downloads all segments in parallel at full speed —
-        // far faster than streaming through our server's ffmpeg conversion.
-        if (data.needs_conversion && data.stream_url) {
-          setState('downloading');
-          setMsg('Opening stream — IDM/VLC will download segments at full speed.');
-          const a = document.createElement('a');
-          a.href = data.stream_url;
-          a.download = (data.filename || `${title || 'movie'}_${resolution}p`).replace(/\.mp4$/, '.m3u8');
-          a.target = '_blank';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          return true;
-        }
-
-        // Direct MP4 (BWM redirect or server proxy)
-        setState('downloading');
-        setMsg('');
-        const a = document.createElement('a');
-        a.href = dlUrl;
-        a.download = data.filename || `${title || 'movie'}_${resolution}p.mp4`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        return true;
-      } catch { return false; }
-    };
-
-    try {
-      // First attempt — works instantly if server already has the URL cached
-      const ok = await attemptDownload();
-      if (ok) {
-        setState('done');
-        setMsg(state === 'converting' ? 'Download started — may take a moment.' : 'Download started!');
-        setBusyQ(null);
-        setTimeout(() => { setState('idle'); setMsg(''); }, 4000);
-        return;
-      }
-
-      // Server doesn't have the URL yet — prime the proxy player silently
-      setState('priming');
-      setMsg('Loading stream…');
-      primePlayer(resolution);
-
-      // Poll every 2 s for up to 10 s
-      let found = false;
-      for (let i = 0; i < 5; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        setMsg(`Loading stream… ${(i + 1) * 2}s`);
-        const ok2 = await attemptDownload();
-        if (ok2) { found = true; break; }
-      }
-
-      if (found) {
-        setState('done');
-        setMsg('Download started!');
-        setBusyQ(null);
-        setTimeout(() => { setState('idle'); setMsg(''); }, 4000);
-      } else {
-        setState('error');
-        setMsg('Could not fetch stream. Try playing the episode first.');
-        setBusyQ(null);
-      }
-    } catch {
-      setState('error');
-      setMsg('Connection error — please try again.');
-      setBusyQ(null);
-    }
+    setMsg('Download started — check your Downloads folder.');
+    setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 5000);
   };
 
   const isErr  = state === 'error';
@@ -259,27 +125,10 @@ function DownloadPanel({
     ? 'px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5'
     : 'flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm text-sm font-medium border border-white/10';
 
-  const qualityLabel = (q: string) => {
-    if (q === '1080p') return 'Full HD';
-    if (q === '720p')  return 'HD';
-    if (q === '480p')  return 'SD';
-    if (q === '360p')  return 'Low';
-    return '';
-  };
-
   return (
     <div className="relative" ref={panelRef}>
-      {/* Hidden iframe for priming the proxy player */}
-      <iframe
-        ref={iframeRef}
-        className="absolute w-0 h-0 opacity-0 pointer-events-none"
-        allow="autoplay"
-        title="dl-prime"
-        sandbox="allow-scripts allow-same-origin allow-forms"
-      />
-
       <button
-        onClick={() => { setOpen(v => !v); setState('idle'); setMsg(''); }}
+        onClick={() => { setOpen(v => !v); setState('idle'); setMsg(''); setBusyQ(null); }}
         className={btnClass}
         title="Download MP4"
       >
@@ -288,110 +137,53 @@ function DownloadPanel({
       </button>
 
       {open && (
-        <div className="absolute z-50 bottom-full mb-2 right-0 bg-[#1c1c1c] border border-white/10 rounded-xl shadow-2xl overflow-hidden w-56">
+        <div className="absolute z-50 bottom-full mb-2 right-0 bg-[#1c1c1c] border border-white/10 rounded-xl shadow-2xl overflow-hidden w-52">
           {/* Header */}
           <div className="px-4 py-3 border-b border-white/[0.07] flex items-center gap-2">
             <Download className="w-3.5 h-3.5 text-primary" />
-            <span className="text-xs font-bold text-white/80 uppercase tracking-wider">Download MP4</span>
-            {loading && <Loader2 className="w-3 h-3 animate-spin text-white/40 ml-auto" />}
+            <span className="text-xs font-bold text-white/80 uppercase tracking-wider">Download</span>
           </div>
 
-          {/* Loading skeleton while pre-fetching */}
-          {loading && (
-            <div className="px-4 py-3 text-[11px] text-white/40 flex items-center gap-2">
-              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-              Finding sources…
-            </div>
-          )}
-
-          {/* Direct sources — BWM MP4 or HLS stream */}
-          {!loading && sources && sources.length > 0 && (
-            <div className="p-2 flex flex-col gap-1">
-              {sources.map(src => (
-                <button
-                  key={src.quality}
-                  onClick={() => downloadDirect(src)}
-                  disabled={isBusy}
-                  className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50
-                    bg-white/5 hover:bg-white/12 text-white`}
-                >
-                  <div className="text-left">
-                    <span className="font-semibold">{src.quality}</span>
-                    {src.isHls
-                      ? <span className="text-blue-400/70 text-[10px] ml-2">HLS stream · IDM</span>
-                      : <span className="text-white/35 text-[10px] ml-2">{qualityLabel(src.quality)}</span>
-                    }
-                  </div>
-                  <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* No source found after pre-fetch */}
-          {!loading && !sources && state === 'idle' && !msg && (
-            <div className="px-4 py-3 text-[11px] text-white/40 leading-snug space-y-2">
-              <div>
-                No download source yet.
-                <br />
-                <span className="text-white/25">Watch on Server 2 first, then tap Retry.</span>
-              </div>
+          {/* Quality buttons — always shown */}
+          <div className="p-2 flex flex-col gap-1">
+            {([1080, 720, 480] as const).map(q => (
               <button
-                onClick={() => { loadedFor.current = ''; setOpen(false); setTimeout(() => setOpen(true), 50); }}
-                className="flex items-center gap-1 text-primary/70 hover:text-primary text-[11px] font-medium transition-colors"
+                key={q}
+                onClick={() => download(q)}
+                disabled={isBusy}
+                className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50 ${
+                  busyQ === q
+                    ? 'bg-primary/20 text-primary'
+                    : 'bg-white/5 hover:bg-white/12 text-white'
+                }`}
               >
-                <RefreshCw className="w-3 h-3" /> Retry
+                <div className="text-left">
+                  <span className="font-semibold">{q}p</span>
+                  <span className="text-white/35 text-[10px] ml-2">
+                    {q === 1080 ? 'Full HD' : q === 720 ? 'HD' : 'SD'}
+                  </span>
+                </div>
+                {busyQ === q
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
+                  : <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />}
               </button>
-            </div>
-          )}
+            ))}
+          </div>
 
-          {/* Active trigger buttons — only shown when user clicked and a job is running */}
-          {!loading && !sources && (state !== 'idle' || msg) && (
-            <div className="p-2 flex flex-col gap-1">
-              {([1080, 720, 480] as const).map(q => (
-                <button
-                  key={q}
-                  onClick={() => trigger(q)}
-                  disabled={isBusy}
-                  className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50 ${
-                    busyQ === q
-                      ? 'bg-primary/20 text-primary'
-                      : 'bg-white/5 hover:bg-white/12 text-white'
-                  }`}
-                >
-                  <div className="text-left">
-                    <span className="font-semibold">{q}p</span>
-                    <span className="text-white/35 text-[10px] ml-2">
-                      {q === 1080 ? 'Full HD' : q === 720 ? 'HD' : 'SD'}
-                    </span>
-                  </div>
-                  {busyQ === q
-                    ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
-                    : <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Status / error message */}
-          {(msg || state === 'converting') && (
+          {/* Status message */}
+          {msg && (
             <div className={`mx-2 mb-2 px-3 py-2 rounded-lg text-[11px] leading-snug flex items-start gap-1.5 ${
-              isErr
-                ? 'bg-red-500/10 text-red-400'
-                : state === 'done'
-                  ? 'bg-green-500/10 text-green-400'
-                  : 'bg-primary/10 text-primary/80'
+              isErr ? 'bg-red-500/10 text-red-400'
+                : state === 'done' ? 'bg-green-500/10 text-green-400'
+                : 'bg-primary/10 text-primary/80'
             }`}>
-              {(state === 'converting' || state === 'priming' || state === 'checking') &&
-                <Loader2 className="w-3 h-3 animate-spin shrink-0 mt-0.5" />}
-              {state === 'done' && <Check className="w-3 h-3 shrink-0 mt-0.5" />}
-              <span>{msg || 'Converting HLS → MP4…'}</span>
+              {state === 'starting' && <Loader2 className="w-3 h-3 animate-spin shrink-0 mt-0.5" />}
+              {state === 'done'     && <Check    className="w-3 h-3 shrink-0 mt-0.5" />}
+              <span>{msg}</span>
             </div>
           )}
 
-          <p className="px-4 pb-3 text-[10px] text-white/20 leading-snug">
-            {sources ? 'Direct MP4 · No conversion needed' : 'Always delivered as .mp4'}
-          </p>
+          <p className="px-4 pb-3 text-[10px] text-white/20">Saves to Downloads folder</p>
         </div>
       )}
     </div>
