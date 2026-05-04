@@ -71,7 +71,7 @@ export interface StreamData {
   };
 }
 
-const API_BASE = 'https://movieapi.nasotc.com';
+const API_BASE = 'https://movieapi.jchege.tech';
 
 export async function fetchTrending(limit = 20): Promise<{ trending: Movie[] }> {
   const res = await fetch(`${API_BASE}/trending?limit=${limit}`);
