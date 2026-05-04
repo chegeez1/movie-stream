@@ -328,8 +328,17 @@ function DownloadPanel({
             </div>
           )}
 
-          {/* Fallback quality buttons (works for all titles — primes if needed) */}
-          {!loading && !sources && (
+          {/* No source found after pre-fetch */}
+          {!loading && !sources && state === 'idle' && !msg && (
+            <div className="px-4 py-3 text-[11px] text-white/40 leading-snug">
+              No download source available for this title.
+              <br />
+              <span className="text-white/25">Watch it on Server 2 first, then try again.</span>
+            </div>
+          )}
+
+          {/* Active trigger buttons — only shown when user clicked and a job is running */}
+          {!loading && !sources && (state !== 'idle' || msg) && (
             <div className="p-2 flex flex-col gap-1">
               {([1080, 720, 480] as const).map(q => (
                 <button
