@@ -18,6 +18,7 @@ import {
   fetchFeatured,
   fetchMoviesByGenre,
   fetchMoodMovies,
+  fetchLocalLibraryMovies,
 } from '@/lib/api';
 
 export function useTrendingMovies(limit = 20) {
@@ -192,4 +193,20 @@ export function useMoodMovies(mood: string, limit = 20) {
     staleTime: 60 * 60 * 1000,
     gcTime:    2 * 60 * 60 * 1000,
   });
+}
+
+export function useLocalLibraryMovies(limit = 500) {
+  return useQuery({
+    queryKey: ['movies', 'local-library', limit],
+    queryFn: () => fetchLocalLibraryMovies(limit),
+    staleTime: 5 * 60 * 1000,
+    gcTime:    30 * 60 * 1000,
+  });
+}
+
+/** Returns a Set of detail_paths that are downloaded to the server. */
+export function useDownloadedSet(): Set<string> {
+  const { data } = useLocalLibraryMovies(500);
+  const movies = data?.movies ?? [];
+  return new Set(movies.map(m => m.detail_path).filter(Boolean));
 }
