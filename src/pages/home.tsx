@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useHomeData, useTrendingMovies, useTopRated, useRanking, useNewReleases, useFeatured, useSimilar, useLocalLibraryMovies } from '@/hooks/use-movies';
+import { useHomeData, useSimilar, useLocalLibraryMovies } from '@/hooks/use-movies';
 import { useWatchHistory } from '@/hooks/use-watch-history';
 import { Layout } from '@/components/layout';
 import { MovieCard, MovieCardSkeleton } from '@/components/movie-card';
 import { Link, useLocation } from 'wouter';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, ChevronLeft, ChevronRight, Volume2, VolumeX, Share2, X, Clock, Trash2, Shuffle, HardDrive } from 'lucide-react';
+import { Play, ChevronLeft, ChevronRight, Volume2, VolumeX, Share2, X, Clock, Trash2, Shuffle, HardDrive, Tv, Film } from 'lucide-react';
 import type { BannerItem, HomeSection, Movie } from '@/lib/api';
 import { fetchRandomMovie } from '@/lib/api';
 import type { WatchHistoryItem } from '@/hooks/use-watch-history';
@@ -439,32 +439,68 @@ function CollectionsRow() {
   );
 }
 
+/* ─── Section divider ─────────────────────────────────────────────────── */
+function SectionDivider({ icon, label, href, linkLabel }: {
+  icon: React.ReactNode;
+  label: string;
+  href?: string;
+  linkLabel?: string;
+}) {
+  return (
+    <div className="px-5 md:px-10 pt-7 pb-2 flex items-center gap-3">
+      <div className="flex items-center gap-2">
+        <div className="w-1 h-5 rounded-full bg-primary shrink-0" />
+        <span className="flex items-center gap-1.5 text-white font-extrabold text-lg tracking-tight">
+          {icon}
+          {label}
+        </span>
+      </div>
+      <div className="flex-1 h-px bg-white/8" />
+      {href && (
+        <Link href={href} className="text-xs text-primary hover:underline font-semibold flex items-center gap-1 shrink-0">
+          {linkLabel ?? 'See All'} <ChevronRight className="w-3 h-3" />
+        </Link>
+      )}
+    </div>
+  );
+}
+
 /* ─── Home page ───────────────────────────────────────────────────────── */
+
+/* Keywords that identify a section as TV/Series content */
+const TV_KEYWORDS = ['series', 'drama', 'anime', 'tv', 'show', 'k-drama', 'kdrama', 'c-drama', 'cdrama'];
+const isTV = (title: string) => TV_KEYWORDS.some(k => title.toLowerCase().includes(k));
+
+/* Fixed preferred ordering for TV and Movie sections */
+const TV_ORDER  = ['popular series','hot short tv','anime','k-drama','c-drama','turkish drama','sa drama','black show','black serie'];
+const MOV_ORDER = ['popular movie','action','horror','romance','adventure','crime','thriller','comedy','family','sci-fi','biography'];
+
+function sortSections(sections: HomeSection[], orderHints: string[]) {
+  return [...sections].sort((a, b) => {
+    const ai = orderHints.findIndex(h => a.title.toLowerCase().includes(h));
+    const bi = orderHints.findIndex(h => b.title.toLowerCase().includes(h));
+    const an = ai === -1 ? 99 : ai;
+    const bn = bi === -1 ? 99 : bi;
+    return an - bn;
+  });
+}
+
 export default function Home() {
-  const { data, isLoading: homeLoading }               = useHomeData();
-  const { data: trendingData, isLoading: trendingLoading } = useTrendingMovies(20);
-  const { data: topRatedData, isLoading: topRatedLoading } = useTopRated(20);
-  const { data: rankingData,  isLoading: rankingLoading  } = useRanking('', 1, 20);
-  const { data: newRelData,   isLoading: newRelLoading   } = useNewReleases(20);
-  const { data: featuredData, isLoading: featuredLoading } = useFeatured(20);
-  const { data: libraryData,  isLoading: libraryLoading  } = useLocalLibraryMovies(24);
-  const { history, removeFromHistory, clearHistory }    = useWatchHistory();
+  const { data, isLoading: homeLoading } = useHomeData();
+  const { data: libraryData, isLoading: libraryLoading } = useLocalLibraryMovies(24);
+  const { history, removeFromHistory, clearHistory } = useWatchHistory();
 
-  const bannerItems  = data?.banner?.items ?? [];
-  const apiSections  = data?.operatingList ?? [];
-  const trending     = trendingData?.trending ?? [];
-  const topRated     = topRatedData?.movies    ?? [];
-  const charts       = rankingData?.movies     ?? [];
-  const newReleases  = newRelData?.movies      ?? [];
-  const featured     = featuredData?.movies    ?? [];
-  const libMovies    = libraryData?.movies     ?? [];
-  const libTotal     = libraryData?.total      ?? 0;
+  const bannerItems = data?.banner?.items ?? [];
+  const allSections = data?.operatingList ?? [];
+  const libMovies   = libraryData?.movies ?? [];
+  const libTotal    = libraryData?.total  ?? 0;
 
-  const sectionHref = (s: HomeSection) => {
-    const t = s.title.toLowerCase();
-    if (t.includes('series') || t.includes('drama') || t.includes('show') || t.includes('anime') || t.includes('k-')) return '/browse/series';
-    return '/browse/movies';
-  };
+  /* Split the 13 sections into TV and Movies groups */
+  const tvSections  = sortSections(allSections.filter(s => isTV(s.title)),  TV_ORDER);
+  const movSections = sortSections(allSections.filter(s => !isTV(s.title)), MOV_ORDER);
+
+  const sectionHref = (s: HomeSection) =>
+    isTV(s.title) ? '/browse/series' : '/browse/movies';
 
   return (
     <Layout>
@@ -474,17 +510,14 @@ export default function Home() {
       }
 
       <div className="pb-24 -mt-16 relative z-10">
-        {/* Continue Watching */}
-        <ContinueWatchingRow
-          items={history}
-          onRemove={removeFromHistory}
-          onClear={clearHistory}
-        />
 
-        {/* Genre mood chips — always visible */}
+        {/* Continue Watching */}
+        <ContinueWatchingRow items={history} onRemove={removeFromHistory} onClear={clearHistory} />
+
+        {/* Genre / mood quick-nav */}
         <GenreChips />
 
-        {/* On This Server row */}
+        {/* ── On This Server ── */}
         {(libraryLoading || libMovies.length > 0) && (
           <section className="py-3 group/row">
             <div className="px-5 md:px-10 mb-3 flex items-center justify-between">
@@ -501,47 +534,61 @@ export default function Home() {
                 Browse All <ChevronRight className="w-3 h-3" />
               </Link>
             </div>
-            <div className="relative">
-              <div className="flex gap-2.5 overflow-x-auto hide-scrollbar px-5 md:px-10 pb-1">
-                {libraryLoading
-                  ? Array.from({ length: 10 }).map((_, i) => (
-                      <div key={i} className="w-[130px] md:w-[152px] shrink-0"><MovieCardSkeleton /></div>
-                    ))
-                  : libMovies.map((m, i) => (
-                      <div key={m.id || i} className="w-[130px] md:w-[152px] shrink-0">
-                        <MovieCard movie={m} index={i} />
-                      </div>
-                    ))
-                }
-              </div>
+            <div className="flex gap-2.5 overflow-x-auto hide-scrollbar px-5 md:px-10 pb-1">
+              {libraryLoading
+                ? Array.from({ length: 10 }).map((_, i) => (
+                    <div key={i} className="w-[130px] md:w-[152px] shrink-0"><MovieCardSkeleton /></div>
+                  ))
+                : libMovies.map((m, i) => (
+                    <div key={m.id || i} className="w-[130px] md:w-[152px] shrink-0">
+                      <MovieCard movie={m} index={i} />
+                    </div>
+                  ))
+              }
             </div>
           </section>
         )}
 
-        <Row title="Trending Now 🔥"    movies={trending}    isLoading={trendingLoading} href="/browse/trending" />
-
-        {/* Personalized row — only shown if user has watch history */}
+        {/* Personalized row */}
         <PersonalizedRow history={history} />
 
-        <Row title="New Releases ✨"    movies={newReleases} isLoading={newRelLoading}   href="/browse/movies" />
-        <Row title="Featured Today 🎯"  movies={featured}    isLoading={featuredLoading} href="/browse/all" />
-        <CollectionsRow />
-        <Row title="Charts 📊"          movies={charts}      isLoading={rankingLoading} />
-        <Row title="Top Rated ⭐"       movies={topRated}    isLoading={topRatedLoading} href="/browse/movies" />
+        {/* ── TV SHOWS ──────────────────────────────────────────────── */}
+        <SectionDivider
+          icon={<Tv className="w-5 h-5 text-violet-400" />}
+          label="TV Shows"
+          href="/browse/series"
+          linkLabel="Browse All Series"
+        />
 
         {homeLoading
-          ? Array.from({ length: 4 }).map((_, i) => (
-              <Row key={i} title="Loading…" movies={[]} isLoading />
-            ))
-          : apiSections.map((section, i) => (
-              <Row
-                key={`${section.title}-${i}`}
-                title={section.title}
-                movies={section.subjects}
-                href={sectionHref(section)}
-              />
+          ? Array.from({ length: 3 }).map((_, i) => <Row key={i} title="" movies={[]} isLoading />)
+          : tvSections.map((s, i) => (
+              <Row key={`tv-${i}`} title={s.title} movies={s.subjects} href={sectionHref(s)} />
             ))
         }
+
+        {/* ── MOVIES ────────────────────────────────────────────────── */}
+        <SectionDivider
+          icon={<Film className="w-5 h-5 text-primary" />}
+          label="Movies"
+          href="/browse/movies"
+          linkLabel="Browse All Movies"
+        />
+
+        {homeLoading
+          ? Array.from({ length: 3 }).map((_, i) => <Row key={i} title="" movies={[]} isLoading />)
+          : movSections.map((s, i) => (
+              <Row key={`mov-${i}`} title={s.title} movies={s.subjects} href={sectionHref(s)} />
+            ))
+        }
+
+        {/* ── Browse by mood / genre ─────────────────────────────── */}
+        <SectionDivider
+          icon={<span className="text-lg">🎭</span>}
+          label="Browse Collections"
+        />
+        <CollectionsRow />
+
       </div>
     </Layout>
   );
