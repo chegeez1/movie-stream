@@ -3,7 +3,7 @@ import { Link, useLocation } from 'wouter';
 import {
   Home, Tv, Film, TrendingUp, Search,
   ChevronRight, Bookmark, Compass, BookmarkCheck,
-  Smartphone, RefreshCw, LayoutGrid, Clock, HelpCircle, X,
+  Smartphone, RefreshCw, LayoutGrid, Clock, HelpCircle, X, HardDrive,
 } from 'lucide-react';
 import { useWatchlist } from '@/hooks/use-watchlist';
 
@@ -17,6 +17,7 @@ const MAIN_NAV = [
   { label: 'Movies',    href: '/browse/movies',   Icon: Film       },
   { label: 'Trending',  href: '/browse/trending', Icon: TrendingUp },
   { label: 'All',       href: '/browse/all',      Icon: LayoutGrid },
+  { label: 'Library',   href: '/library',         Icon: HardDrive  },
 ];
 
 function NavItem({
