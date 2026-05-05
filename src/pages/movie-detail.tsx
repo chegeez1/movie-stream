@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRoute, Link } from 'wouter';
-import { usePlayData, useSimilar } from '@/hooks/use-movies';
+import { usePlayData, useSimilar, useDownloadedSet } from '@/hooks/use-movies';
 import { useWatchHistory } from '@/hooks/use-watch-history';
 import { useWatchlist } from '@/hooks/use-watchlist';
 import type { StreamData, ServerResult } from '@/lib/api';
@@ -8,7 +8,7 @@ import { fetchPlay } from '@/lib/api';
 import { Layout } from '@/components/layout';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Play, X, Loader2, Info, Share2, Check, RefreshCw, Wifi, WifiOff, Zap, Bookmark, BookmarkCheck, Film, Star, Eye, Download, Maximize, Minimize } from 'lucide-react';
+import { Play, X, Loader2, Info, Share2, Check, RefreshCw, Wifi, WifiOff, Zap, Bookmark, BookmarkCheck, Film, Star, Eye, Download, Maximize, Minimize, HardDrive, Globe } from 'lucide-react';
 import { useRatings } from '@/hooks/use-ratings';
 import { MovieCard, MovieCardSkeleton } from '@/components/movie-card';
 
@@ -54,13 +54,14 @@ function useNetworkStatus() {
       - If watch_first: silently loads the proxy player in a hidden iframe for
         8 s to capture the HLS URL, then auto-retries → starts download.
 ──────────────────────────────────────────────────────────────────────── */
-type DlState = 'idle' | 'starting' | 'done' | 'error';
+type DlState = 'idle' | 'queued' | 'downloading' | 'ready' | 'done' | 'error';
+
+const API = 'https://movieapi.jchege.tech';
 
 function DownloadPanel({
   detailPath,
   season = 0,
   ep = 1,
-  title = '',
   compact = false,
 }: {
   detailPath: string;
@@ -71,11 +72,15 @@ function DownloadPanel({
   compact?: boolean;
   embedUrl?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const [state, setState] = useState<DlState>('idle');
-  const [msg, setMsg]     = useState('');
-  const [busyQ, setBusyQ] = useState<number | null>(null);
-  const panelRef          = useRef<HTMLDivElement>(null);
+  const [open, setOpen]       = useState(false);
+  const [state, setState]     = useState<DlState>('idle');
+  const [msg, setMsg]         = useState('');
+  const [progress, setProgress] = useState(0);
+  const [busyQ, setBusyQ]     = useState<number | null>(null);
+  const [jobId, setJobId]     = useState<string | null>(null);
+  const [dlUrl, setDlUrl]     = useState<string | null>(null);
+  const panelRef              = useRef<HTMLDivElement>(null);
+  const pollRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Close on outside click
   useEffect(() => {
@@ -89,54 +94,102 @@ function DownloadPanel({
   }, [open]);
 
   // Reset state when episode changes
-  useEffect(() => { setState('idle'); setMsg(''); setBusyQ(null); }, [ep, season]);
+  useEffect(() => {
+    if (pollRef.current) clearTimeout(pollRef.current);
+    setState('idle'); setMsg(''); setBusyQ(null); setProgress(0); setJobId(null); setDlUrl(null);
+  }, [ep, season]);
 
-  const download = async (resolution: number) => {
+  // Cleanup poll on unmount
+  useEffect(() => () => { if (pollRef.current) clearTimeout(pollRef.current); }, []);
+
+  const reset = (delay = 8000) => setTimeout(() => {
+    setState('idle'); setMsg(''); setBusyQ(null); setProgress(0); setJobId(null); setDlUrl(null);
+  }, delay);
+
+  const poll = (jid: string) => {
+    pollRef.current = setTimeout(async () => {
+      try {
+        const r    = await fetch(`${API}/download-job/${jid}`);
+        const data = await r.json();
+
+        if (data.status === 'ready') {
+          const url = `${API}/download-file/${jid}`;
+          setDlUrl(url);
+          setProgress(100);
+          setState('ready');
+          setMsg(`Ready — ${data.size_mb ?? '?'} MB. Tap below to save.`);
+        } else if (data.status === 'error') {
+          setState('error');
+          setMsg(data.error || 'Download failed on server.');
+          reset(6000);
+        } else {
+          const pct = data.progress ?? 0;
+          setProgress(pct);
+          setState('downloading');
+          setMsg(`Saving to server… ${pct.toFixed(0)}%`);
+          poll(jid);
+        }
+      } catch {
+        setState('error');
+        setMsg('Lost connection to server.');
+        reset(5000);
+      }
+    }, 1800);
+  };
+
+  const startDownload = async (resolution: number) => {
     if (busyQ !== null) return;
     setBusyQ(resolution);
-    setState('starting');
-    setMsg('Checking source…');
+    setState('queued');
+    setProgress(0);
+    setMsg('Starting…');
 
     const qs = new URLSearchParams({
       resolution: String(resolution),
-      ep: String(ep),
-      season: String(season),
+      ep:         String(ep),
+      season:     String(season),
     });
-    const infoUrl = `https://movieapi.jchege.tech/download-info/${detailPath}?${qs}`;
-    const dlUrl   = `https://movieapi.jchege.tech/download/${detailPath}?${qs}`;
-
-    // Open a blank tab NOW (synchronous, inside user-gesture) so popup blockers
-    // don't fire. We'll redirect it to the real download URL after the check,
-    // or close it if no source is found.
-    const win = window.open('', '_blank');
 
     try {
-      const res  = await fetch(infoUrl, { signal: AbortSignal.timeout(12_000) });
-      const data = await res.json();
-
-      if (res.ok && data.available) {
-        // Server has a source — redirect the blank tab to the download.
-        // Server sends Content-Disposition: attachment so the browser saves the file.
-        if (win) win.location.href = dlUrl;
-        setState('done');
-        setMsg('Download started — check your Downloads folder.');
-        setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 5000);
-      } else {
-        if (win) win.close();
-        setState('error');
-        setMsg('No source yet — watch on Server 2 first, then retry.');
-        setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 6000);
+      const res  = await fetch(`${API}/prepare-download/${detailPath}?${qs}`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Server error ${res.status}`);
       }
-    } catch {
-      if (win) win.close();
+      const data = await res.json();
+      const jid  = data.job_id as string;
+      setJobId(jid);
+
+      if (data.status === 'ready') {
+        // Already on disk — serve immediately
+        const url = `${API}/download-file/${jid}`;
+        setDlUrl(url);
+        setProgress(100);
+        setState('ready');
+        setMsg('Already cached. Tap below to save.');
+      } else {
+        setState('queued');
+        setMsg('Queued — downloading to server…');
+        poll(jid);
+      }
+    } catch (e: unknown) {
       setState('error');
-      setMsg('Connection error — please try again.');
-      setTimeout(() => { setState('idle'); setMsg(''); setBusyQ(null); }, 4000);
+      setMsg(e instanceof Error ? e.message : 'Failed to start download.');
+      reset(5000);
     }
   };
 
+  const saveToDevice = () => {
+    if (!dlUrl) return;
+    window.open(dlUrl, '_blank');
+    setState('done');
+    setMsg('Saving to your Downloads folder…');
+    reset(7000);
+  };
+
   const isErr  = state === 'error';
-  const isBusy = busyQ !== null;
+  const isBusy = busyQ !== null && state !== 'ready' && state !== 'done' && state !== 'error';
+  const isActive = state === 'queued' || state === 'downloading';
 
   const btnClass = compact
     ? 'px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors flex items-center gap-1.5'
@@ -145,7 +198,7 @@ function DownloadPanel({
   return (
     <div className="relative" ref={panelRef}>
       <button
-        onClick={() => { setOpen(v => !v); setState('idle'); setMsg(''); setBusyQ(null); }}
+        onClick={() => { setOpen(v => !v); }}
         className={btnClass}
         title="Download MP4"
       >
@@ -154,53 +207,80 @@ function DownloadPanel({
       </button>
 
       {open && (
-        <div className="absolute z-50 bottom-full mb-2 right-0 bg-[#1c1c1c] border border-white/10 rounded-xl shadow-2xl overflow-hidden w-52">
+        <div className="absolute z-50 bottom-full mb-2 right-0 bg-[#1c1c1c] border border-white/10 rounded-xl shadow-2xl overflow-hidden w-56">
           {/* Header */}
           <div className="px-4 py-3 border-b border-white/[0.07] flex items-center gap-2">
             <Download className="w-3.5 h-3.5 text-primary" />
             <span className="text-xs font-bold text-white/80 uppercase tracking-wider">Download</span>
           </div>
 
-          {/* Quality buttons — always shown */}
-          <div className="p-2 flex flex-col gap-1">
-            {([1080, 720, 480] as const).map(q => (
-              <button
-                key={q}
-                onClick={() => download(q)}
-                disabled={isBusy}
-                className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50 ${
-                  busyQ === q
-                    ? 'bg-primary/20 text-primary'
-                    : 'bg-white/5 hover:bg-white/12 text-white'
-                }`}
-              >
-                <div className="text-left">
-                  <span className="font-semibold">{q}p</span>
-                  <span className="text-white/35 text-[10px] ml-2">
-                    {q === 1080 ? 'Full HD' : q === 720 ? 'HD' : 'SD'}
-                  </span>
-                </div>
-                {busyQ === q
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
-                  : <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />}
-              </button>
-            ))}
-          </div>
+          {/* Quality buttons — shown when idle or error */}
+          {(state === 'idle' || isErr) && (
+            <div className="p-2 flex flex-col gap-1">
+              {([1080, 720, 480] as const).map(q => (
+                <button
+                  key={q}
+                  onClick={() => startDownload(q)}
+                  disabled={isBusy}
+                  className="flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors bg-white/5 hover:bg-white/12 text-white disabled:opacity-40"
+                >
+                  <div className="text-left">
+                    <span className="font-semibold">{q}p</span>
+                    <span className="text-white/35 text-[10px] ml-2">
+                      {q === 1080 ? 'Full HD' : q === 720 ? 'HD' : 'SD'}
+                    </span>
+                  </div>
+                  <Download className="w-3.5 h-3.5 text-white/25 shrink-0" />
+                </button>
+              ))}
+            </div>
+          )}
 
-          {/* Status message */}
-          {msg && (
+          {/* Progress section — while downloading */}
+          {isActive && (
+            <div className="p-3 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
+                <span className="text-[11px] text-white/70">{msg}</span>
+              </div>
+              <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-700"
+                  style={{ width: `${Math.max(progress, state === 'queued' ? 3 : 5)}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] text-white/30">
+                <span>Server is downloading…</span>
+                <span>{progress.toFixed(0)}%</span>
+              </div>
+            </div>
+          )}
+
+          {/* Ready — user must tap to save (direct gesture avoids popup blockers) */}
+          {state === 'ready' && (
+            <div className="p-3 flex flex-col gap-2">
+              <p className="text-[11px] text-white/60 px-1">{msg}</p>
+              <button
+                onClick={saveToDevice}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-primary text-black font-semibold text-sm hover:bg-primary/90 transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                Save to Device
+              </button>
+            </div>
+          )}
+
+          {/* Status message for done / error */}
+          {(state === 'done' || isErr) && msg && (
             <div className={`mx-2 mb-2 px-3 py-2 rounded-lg text-[11px] leading-snug flex items-start gap-1.5 ${
-              isErr ? 'bg-red-500/10 text-red-400'
-                : state === 'done' ? 'bg-green-500/10 text-green-400'
-                : 'bg-primary/10 text-primary/80'
+              isErr ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'
             }`}>
-              {state === 'starting' && <Loader2 className="w-3 h-3 animate-spin shrink-0 mt-0.5" />}
-              {state === 'done'     && <Check    className="w-3 h-3 shrink-0 mt-0.5" />}
+              {state === 'done' && <Check className="w-3 h-3 shrink-0 mt-0.5" />}
               <span>{msg}</span>
             </div>
           )}
 
-          <p className="px-4 pb-3 text-[10px] text-white/20">Saves to Downloads folder</p>
+          <p className="px-4 pb-3 text-[10px] text-white/20">Downloads via server — always works</p>
         </div>
       )}
     </div>
@@ -383,6 +463,8 @@ interface WatchConfig {
   season: number;
   /** Pre-ranked sources from the combined /play/ endpoint (instant if cached). null = needs fetching. */
   preRanked: PlayerSource[] | null;
+  /** Set when this title is already on the server — use native video player, no ads */
+  localStreamUrl?: string;
 }
 
 function WatchModal({
@@ -394,13 +476,17 @@ function WatchModal({
   shareUrl: string;
   onClose: () => void;
 }) {
-  const { streamData, detailPath, ep, season, preRanked } = config;
+  const { streamData, detailPath, ep, season, preRanked, localStreamUrl } = config;
+
+  /* Local native player — no ads, served straight from VPS disk */
+  const [useLocalPlayer, setUseLocalPlayer] = useState(!!localStreamUrl);
+  const videoRef = React.useRef<HTMLVideoElement>(null);
 
   const [sources, setSources]     = useState<PlayerSource[]>(
     preRanked ?? buildStaticSources(streamData, ep, season),
   );
   /* checking = we need to fetch ranked servers (no preRanked, and IMDB ID exists) */
-  const [checking, setChecking]   = useState(!preRanked && !!streamData.imdb_id);
+  const [checking, setChecking]   = useState(!preRanked && !!streamData.imdb_id && !localStreamUrl);
   const [srcIdx, setSrcIdx]       = useState(0);
   const [loaded, setLoaded]       = useState(false);
   const [countdown, setCountdown] = useState(LOAD_TIMEOUT_SECS);
@@ -632,37 +718,73 @@ function WatchModal({
 
         {/* Row 2 (mobile) / middle (desktop): server buttons */}
         <div className="flex-1 flex items-center gap-1.5 overflow-x-auto min-w-0">
-          {checking ? (
-            <span className="flex items-center gap-1.5 text-xs text-white/50">
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-              Ranking servers…
-            </span>
-          ) : (
-            sources.map((s, i) => (
+
+          {/* Local server toggle — shown when file is on VPS */}
+          {localStreamUrl && (
+            <>
               <button
-                key={i}
-                onClick={() => handleManualSwitch(i)}
-                title={
-                  s.isProxy ? `${s.label} — Ad-free (our server)`
-                  : s.ok === false ? `${s.label} — unavailable`
-                  : s.ok === true ? `${s.label} — ${s.latency_ms}ms · may contain ads`
-                  : `${s.label} · may contain ads`
-                }
+                onClick={() => setUseLocalPlayer(true)}
+                title="Stream from your VPS — no ads, no buffering"
                 className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shrink-0 transition-colors ${
-                  i === srcIdx
-                    ? s.isProxy ? 'bg-green-600 text-white' : 'bg-primary text-white'
-                    : s.ok === false
-                      ? 'bg-white/5 text-white/30 hover:bg-white/10 line-through'
-                      : 'bg-white/10 text-white/60 hover:bg-white/20 hover:text-white'
+                  useLocalPlayer
+                    ? 'bg-green-600 text-white'
+                    : 'bg-white/10 text-white/60 hover:bg-white/20 hover:text-white'
                 }`}
               >
-                {s.isProxy && <Zap className="w-2.5 h-2.5" />}
-                {!s.isProxy && s.ok === true  && i !== srcIdx && <Wifi    className="w-2.5 h-2.5 text-green-400" />}
-                {!s.isProxy && s.ok === false                  && <WifiOff className="w-2.5 h-2.5 text-red-400/60" />}
-                {s.label}
-                {s.isProxy && <span className="text-[9px] font-normal opacity-80">ad-free</span>}
+                <HardDrive className="w-2.5 h-2.5" />
+                Your Server
+                <span className="text-[9px] font-normal opacity-80">ad-free</span>
               </button>
-            ))
+              <button
+                onClick={() => { setUseLocalPlayer(false); }}
+                title="External streaming servers (may contain ads)"
+                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shrink-0 transition-colors ${
+                  !useLocalPlayer
+                    ? 'bg-primary text-white'
+                    : 'bg-white/10 text-white/60 hover:bg-white/20 hover:text-white'
+                }`}
+              >
+                <Globe className="w-2.5 h-2.5" />
+                Ext. Servers
+              </button>
+              {!useLocalPlayer && <div className="w-px h-4 bg-white/15 shrink-0 mx-0.5" />}
+            </>
+          )}
+
+          {/* External embed server buttons — shown when not using local player */}
+          {!useLocalPlayer && (
+            checking ? (
+              <span className="flex items-center gap-1.5 text-xs text-white/50">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                Ranking servers…
+              </span>
+            ) : (
+              sources.map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleManualSwitch(i)}
+                  title={
+                    s.isProxy ? `${s.label} — Ad-free (our server)`
+                    : s.ok === false ? `${s.label} — unavailable`
+                    : s.ok === true ? `${s.label} — ${s.latency_ms}ms · may contain ads`
+                    : `${s.label} · may contain ads`
+                  }
+                  className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shrink-0 transition-colors ${
+                    i === srcIdx
+                      ? s.isProxy ? 'bg-green-600 text-white' : 'bg-primary text-white'
+                      : s.ok === false
+                        ? 'bg-white/5 text-white/30 hover:bg-white/10 line-through'
+                        : 'bg-white/10 text-white/60 hover:bg-white/20 hover:text-white'
+                  }`}
+                >
+                  {s.isProxy && <Zap className="w-2.5 h-2.5" />}
+                  {!s.isProxy && s.ok === true  && i !== srcIdx && <Wifi    className="w-2.5 h-2.5 text-green-400" />}
+                  {!s.isProxy && s.ok === false                  && <WifiOff className="w-2.5 h-2.5 text-red-400/60" />}
+                  {s.label}
+                  {s.isProxy && <span className="text-[9px] font-normal opacity-80">ad-free</span>}
+                </button>
+              ))
+            )
           )}
         </div>
 
@@ -718,16 +840,21 @@ function WatchModal({
           </div>
         )}
 
-        {/* Waiting for iframe to load */}
+        {/* Waiting for player to load */}
         {!checking && !loaded && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-10 pointer-events-none">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
-            <span className="text-sm text-white/70">Loading {current.label}…</span>
-            {hasMore && (
-              <span className="text-xs text-white/35">
-                Trying next server in <span className="text-primary font-semibold">{countdown}s</span>
-              </span>
-            )}
+            {useLocalPlayer
+              ? <span className="text-sm text-white/70">Loading from your server…</span>
+              : <>
+                  <span className="text-sm text-white/70">Loading {current.label}…</span>
+                  {hasMore && (
+                    <span className="text-xs text-white/35">
+                      Trying next server in <span className="text-primary font-semibold">{countdown}s</span>
+                    </span>
+                  )}
+                </>
+            }
           </div>
         )}
 
@@ -766,8 +893,23 @@ function WatchModal({
           </div>
         )}
 
+        {/* Native video player — ad-free, streams directly from VPS disk */}
+        {useLocalPlayer && localStreamUrl && (
+          <video
+            ref={videoRef}
+            key={localStreamUrl}
+            src={localStreamUrl}
+            className="absolute inset-0 w-full h-full bg-black"
+            controls
+            autoPlay
+            playsInline
+            onCanPlay={() => setLoaded(true)}
+            style={{ outline: 'none' }}
+          />
+        )}
+
         {/* Iframe — stays mounted through network drops to preserve video buffer */}
-        {!checking && (
+        {!useLocalPlayer && !checking && (
           <iframe
             ref={iframeRef}
             key={`${srcIdx}-${reloadKey}-${current.url}`}
@@ -782,8 +924,8 @@ function WatchModal({
           />
         )}
 
-        {/* Cover strips for proxy sources */}
-        {current.hasCoverStrips && loaded && (
+        {/* Cover strips for proxy sources — only for iframe embed player */}
+        {!useLocalPlayer && current.hasCoverStrips && loaded && (
           <>
             <div className="absolute top-0 left-0 right-0 h-10 bg-black pointer-events-none z-20" />
             <div className="absolute top-0 right-0 bottom-0 w-[30%] bg-black pointer-events-none z-20" />
@@ -806,6 +948,7 @@ export default function MovieDetail() {
   const { data: similarData, isLoading: similarLoading } = useSimilar(detailPath, 14);
   const { addToHistory } = useWatchHistory();
   const { toggleWatchlist, isInWatchlist } = useWatchlist();
+  const downloadedSet = useDownloadedSet();
 
   const [watchConfig,    setWatchConfig]    = useState<WatchConfig | null>(null);
   const [trailerOpen,    setTrailerOpen]    = useState(false);
@@ -853,7 +996,12 @@ export default function MovieDetail() {
     // Track which episode is being watched so download uses correct ep/season
     setDlEp(epNum);
     setDlSeason(Number(seasonNum || streamData.seasons?.[0]?.season || 0));
-    setWatchConfig({ streamData, detailPath, ep: epNum, season: seasonNum, preRanked });
+    // When the title is already on the VPS, stream directly — no ads
+    const isDownloaded = downloadedSet.has(detailPath);
+    const localStreamUrl = isDownloaded
+      ? `https://movieapi.jchege.tech/stream-video/${encodeURIComponent(detailPath)}?ep=${epNum}&season=${seasonNum || 0}`
+      : undefined;
+    setWatchConfig({ streamData, detailPath, ep: epNum, season: seasonNum, preRanked, localStreamUrl });
   };
 
   const backdrop = streamData.stills_url || streamData.cover_url || streamData.trailer?.thumbnail;
