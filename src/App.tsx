@@ -10,6 +10,7 @@ import MovieDetail from "@/pages/movie-detail";
 import Browse from "@/pages/browse";
 import Watchlist from "@/pages/watchlist";
 import HistoryPage from "@/pages/history";
+import LibraryPage from "@/pages/library";
 
 const queryClient = new QueryClient();
 
@@ -22,6 +23,7 @@ function Router() {
       <Route path="/browse/:type" component={Browse} />
       <Route path="/watchlist" component={Watchlist} />
       <Route path="/history" component={HistoryPage} />
+      <Route path="/library" component={LibraryPage} />
       <Route component={NotFound} />
     </Switch>
   );
