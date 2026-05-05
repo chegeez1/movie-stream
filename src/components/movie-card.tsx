@@ -2,8 +2,8 @@ import React from 'react';
 import { Link } from 'wouter';
 import { Movie } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Play, Star, Tv, Film, Bookmark, BookmarkCheck } from 'lucide-react';
-import { usePrefetchPlay } from '@/hooks/use-movies';
+import { Play, Star, Tv, Film, Bookmark, BookmarkCheck, HardDrive } from 'lucide-react';
+import { usePrefetchPlay, useDownloadedSet } from '@/hooks/use-movies';
 import { useWatchlist } from '@/hooks/use-watchlist';
 import { useToast } from '@/hooks/use-toast';
 import { useRatings } from '@/hooks/use-ratings';
@@ -48,10 +48,12 @@ export function MovieCard({ movie, index = 0 }: { movie: Movie; index?: number }
   const { toggleWatchlist, isInWatchlist } = useWatchlist();
   const { toast }   = useToast();
   const { getRating, rate } = useRatings();
+  const downloadedSet = useDownloadedSet();
   const isSeries    = movie.type === 'series';
   const isNew       = isNewRelease(movie);
   const bookmarked  = isInWatchlist(movie.detail_path);
   const myRating    = getRating(movie.detail_path);
+  const isDownloaded = downloadedSet.has(movie.detail_path);
 
   const handleBookmark = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -126,12 +128,17 @@ export function MovieCard({ movie, index = 0 }: { movie: Movie; index?: number }
             }
           </button>
 
-          {/* Type badge — bottom-left */}
-          <div className="absolute bottom-0 left-0 right-0 p-1.5">
+          {/* Type badge + downloaded badge — bottom-left */}
+          <div className="absolute bottom-0 left-0 right-0 p-1.5 flex items-center gap-1">
             <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wide bg-black/60 text-white/80">
               {isSeries ? <Tv className="w-2.5 h-2.5" /> : <Film className="w-2.5 h-2.5" />}
               {isSeries ? 'Series' : 'Movie'}
             </span>
+            {isDownloaded && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wide bg-green-500/80 text-white">
+                <HardDrive className="w-2.5 h-2.5" />
+              </span>
+            )}
           </div>
 
           {/* My-rating indicator dot — top-right corner (when rated) */}
