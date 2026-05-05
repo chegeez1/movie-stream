@@ -740,40 +740,18 @@ function WatchModal({
         {/* Row 2 (mobile) / middle (desktop): server buttons */}
         <div className="flex-1 flex items-center gap-1.5 overflow-x-auto min-w-0">
 
-          {/* Local server toggle — shown when file is on VPS */}
-          {localStreamUrl && (
-            <>
-              <button
-                onClick={() => setUseLocalPlayer(true)}
-                title="Stream from your VPS — no ads, no buffering"
-                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shrink-0 transition-colors ${
-                  useLocalPlayer
-                    ? 'bg-green-600 text-white'
-                    : 'bg-white/10 text-white/60 hover:bg-white/20 hover:text-white'
-                }`}
-              >
-                <HardDrive className="w-2.5 h-2.5" />
-                Your Server
-                <span className="text-[9px] font-normal opacity-80">ad-free</span>
-              </button>
-              <button
-                onClick={() => { setUseLocalPlayer(false); }}
-                title="External streaming servers (may contain ads)"
-                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shrink-0 transition-colors ${
-                  !useLocalPlayer
-                    ? 'bg-primary text-white'
-                    : 'bg-white/10 text-white/60 hover:bg-white/20 hover:text-white'
-                }`}
-              >
-                <Globe className="w-2.5 h-2.5" />
-                Ext. Servers
-              </button>
-              {!useLocalPlayer && <div className="w-px h-4 bg-white/15 shrink-0 mx-0.5" />}
-            </>
-          )}
-
-          {/* External embed server buttons — shown when not using local player */}
-          {!useLocalPlayer && (
+          {localStreamUrl ? (
+            /* Movie is on VPS — show badge only, no external server options */
+            <span
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md bg-green-600 text-white shrink-0"
+              title="Streaming directly from your VPS — zero ads"
+            >
+              <HardDrive className="w-2.5 h-2.5" />
+              Your Server
+              <span className="text-[9px] font-normal opacity-80">ad-free</span>
+            </span>
+          ) : (
+            /* No local file — show external server buttons */
             checking ? (
               <span className="flex items-center gap-1.5 text-xs text-white/50">
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
@@ -939,6 +917,7 @@ function WatchModal({
             allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
             allowFullScreen
             referrerPolicy="no-referrer"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-fullscreen"
             title="Movie Player"
             data-testid="iframe-player"
             onLoad={() => setLoaded(true)}
