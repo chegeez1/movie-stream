@@ -280,6 +280,17 @@ export async function fetchMoviesByGenre(
   return data.data;
 }
 
+export interface LocalLibraryMovie extends Movie {
+  size_mb?: number;
+}
+
+export async function fetchLocalLibraryMovies(limit = 500): Promise<{ movies: LocalLibraryMovie[]; count: number; total: number }> {
+  const res = await fetch(`${API_BASE}/local-library-movies?limit=${limit}`);
+  if (!res.ok) throw new Error('Failed to fetch local library');
+  const data = await res.json();
+  return { movies: data.data?.movies ?? [], count: data.count ?? 0, total: data.total ?? 0 };
+}
+
 export async function fetchRandomMovie(type?: 'movie' | 'series'): Promise<{ movie: Movie }> {
   const params = new URLSearchParams();
   if (type) params.set('type', type);
