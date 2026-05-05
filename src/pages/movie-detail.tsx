@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRoute, Link } from 'wouter';
-import { usePlayData, useSimilar, useDownloadedSet } from '@/hooks/use-movies';
+import { usePlayData, useSimilar } from '@/hooks/use-movies';
 import { useWatchHistory } from '@/hooks/use-watch-history';
 import { useWatchlist } from '@/hooks/use-watchlist';
 import type { StreamData, ServerResult } from '@/lib/api';
@@ -463,8 +463,6 @@ interface WatchConfig {
   season: number;
   /** Pre-ranked sources from the combined /play/ endpoint (instant if cached). null = needs fetching. */
   preRanked: PlayerSource[] | null;
-  /** Set when this title is already on the server — use native video player, no ads */
-  localStreamUrl?: string;
 }
 
 function WatchModal({
@@ -476,17 +474,40 @@ function WatchModal({
   shareUrl: string;
   onClose: () => void;
 }) {
-  const { streamData, detailPath, ep, season, preRanked, localStreamUrl } = config;
+  const { streamData, detailPath, ep, season, preRanked } = config;
 
-  /* Local native player — no ads, served straight from VPS disk */
-  const [useLocalPlayer, setUseLocalPlayer] = useState(!!localStreamUrl);
+  /* Local native player — no ads, served straight from VPS disk.
+     We do a live /download-info check here so we catch every downloaded
+     file, not just what's in the (potentially incomplete) library index. */
+  const [useLocalPlayer, setUseLocalPlayer] = useState(false);
+  const [localStreamUrl, setLocalStreamUrl] = useState<string | null>(null);
   const videoRef = React.useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const res = await fetch(
+          `https://movieapi.jchege.tech/download-info/${encodeURIComponent(detailPath)}?ep=${ep}&season=${season}`
+        );
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
+        if (json.local === true && !cancelled) {
+          const url = `https://movieapi.jchege.tech/stream-video/${encodeURIComponent(detailPath)}?ep=${ep}&season=${season}`;
+          setLocalStreamUrl(url);
+          setUseLocalPlayer(true);
+        }
+      } catch { /* network error — fall back to iframe silently */ }
+    };
+    check();
+    return () => { cancelled = true; };
+  }, [detailPath, ep, season]);
 
   const [sources, setSources]     = useState<PlayerSource[]>(
     preRanked ?? buildStaticSources(streamData, ep, season),
   );
   /* checking = we need to fetch ranked servers (no preRanked, and IMDB ID exists) */
-  const [checking, setChecking]   = useState(!preRanked && !!streamData.imdb_id && !localStreamUrl);
+  const [checking, setChecking]   = useState(!preRanked && !!streamData.imdb_id);
   const [srcIdx, setSrcIdx]       = useState(0);
   const [loaded, setLoaded]       = useState(false);
   const [countdown, setCountdown] = useState(LOAD_TIMEOUT_SECS);
@@ -948,7 +969,6 @@ export default function MovieDetail() {
   const { data: similarData, isLoading: similarLoading } = useSimilar(detailPath, 14);
   const { addToHistory } = useWatchHistory();
   const { toggleWatchlist, isInWatchlist } = useWatchlist();
-  const downloadedSet = useDownloadedSet();
 
   const [watchConfig,    setWatchConfig]    = useState<WatchConfig | null>(null);
   const [trailerOpen,    setTrailerOpen]    = useState(false);
@@ -996,12 +1016,7 @@ export default function MovieDetail() {
     // Track which episode is being watched so download uses correct ep/season
     setDlEp(epNum);
     setDlSeason(Number(seasonNum || streamData.seasons?.[0]?.season || 0));
-    // When the title is already on the VPS, stream directly — no ads
-    const isDownloaded = downloadedSet.has(detailPath);
-    const localStreamUrl = isDownloaded
-      ? `https://movieapi.jchege.tech/stream-video/${encodeURIComponent(detailPath)}?ep=${epNum}&season=${seasonNum || 0}`
-      : undefined;
-    setWatchConfig({ streamData, detailPath, ep: epNum, season: seasonNum, preRanked, localStreamUrl });
+    setWatchConfig({ streamData, detailPath, ep: epNum, season: seasonNum, preRanked });
   };
 
   const backdrop = streamData.stills_url || streamData.cover_url || streamData.trailer?.thumbnail;
