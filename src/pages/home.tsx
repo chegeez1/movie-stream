@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useHomeData, useTrendingMovies, useTopRated, useRanking, useNewReleases, useFeatured, useSimilar } from '@/hooks/use-movies';
+import { useHomeData, useTrendingMovies, useTopRated, useRanking, useNewReleases, useFeatured, useSimilar, useLocalLibraryMovies } from '@/hooks/use-movies';
 import { useWatchHistory } from '@/hooks/use-watch-history';
 import { Layout } from '@/components/layout';
 import { MovieCard, MovieCardSkeleton } from '@/components/movie-card';
 import { Link, useLocation } from 'wouter';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, ChevronLeft, ChevronRight, Volume2, VolumeX, Share2, X, Clock, Trash2, Shuffle } from 'lucide-react';
+import { Play, ChevronLeft, ChevronRight, Volume2, VolumeX, Share2, X, Clock, Trash2, Shuffle, HardDrive } from 'lucide-react';
 import type { BannerItem, HomeSection, Movie } from '@/lib/api';
 import { fetchRandomMovie } from '@/lib/api';
 import type { WatchHistoryItem } from '@/hooks/use-watch-history';
@@ -447,6 +447,7 @@ export default function Home() {
   const { data: rankingData,  isLoading: rankingLoading  } = useRanking('', 1, 20);
   const { data: newRelData,   isLoading: newRelLoading   } = useNewReleases(20);
   const { data: featuredData, isLoading: featuredLoading } = useFeatured(20);
+  const { data: libraryData,  isLoading: libraryLoading  } = useLocalLibraryMovies(24);
   const { history, removeFromHistory, clearHistory }    = useWatchHistory();
 
   const bannerItems  = data?.banner?.items ?? [];
@@ -456,6 +457,8 @@ export default function Home() {
   const charts       = rankingData?.movies     ?? [];
   const newReleases  = newRelData?.movies      ?? [];
   const featured     = featuredData?.movies    ?? [];
+  const libMovies    = libraryData?.movies     ?? [];
+  const libTotal     = libraryData?.total      ?? 0;
 
   const sectionHref = (s: HomeSection) => {
     const t = s.title.toLowerCase();
@@ -480,6 +483,40 @@ export default function Home() {
 
         {/* Genre mood chips — always visible */}
         <GenreChips />
+
+        {/* On This Server row */}
+        {(libraryLoading || libMovies.length > 0) && (
+          <section className="py-3 group/row">
+            <div className="px-5 md:px-10 mb-3 flex items-center justify-between">
+              <h2 className="text-white font-bold text-[15px] flex items-center gap-1.5">
+                <HardDrive className="w-3.5 h-3.5 text-green-400" />
+                On This Server
+                {libTotal > 0 && (
+                  <span className="ml-1 px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 text-[10px] font-bold border border-green-500/25">
+                    {libTotal.toLocaleString()} files
+                  </span>
+                )}
+              </h2>
+              <Link href="/library" className="text-xs text-primary hover:underline font-semibold flex items-center gap-1">
+                Browse All <ChevronRight className="w-3 h-3" />
+              </Link>
+            </div>
+            <div className="relative">
+              <div className="flex gap-2.5 overflow-x-auto hide-scrollbar px-5 md:px-10 pb-1">
+                {libraryLoading
+                  ? Array.from({ length: 10 }).map((_, i) => (
+                      <div key={i} className="w-[130px] md:w-[152px] shrink-0"><MovieCardSkeleton /></div>
+                    ))
+                  : libMovies.map((m, i) => (
+                      <div key={m.id || i} className="w-[130px] md:w-[152px] shrink-0">
+                        <MovieCard movie={m} index={i} />
+                      </div>
+                    ))
+                }
+              </div>
+            </div>
+          </section>
+        )}
 
         <Row title="Trending Now 🔥"    movies={trending}    isLoading={trendingLoading} href="/browse/trending" />
 
